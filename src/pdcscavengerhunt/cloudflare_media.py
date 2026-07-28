@@ -21,13 +21,6 @@ class MediaProviderError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class StoredObject:
-    size_bytes: int
-    content_type: str
-    prefix: bytes
-
-
-@dataclass(frozen=True)
 class StreamVideo:
     size_bytes: int
     status: str
@@ -67,17 +60,6 @@ class CloudflareMediaProvider:
             )
         return self._s3
 
-    def create_photo_upload_url(self, key: str, content_type: str) -> str:
-        return self.s3.generate_presigned_url(
-            "put_object",
-            Params={
-                "Bucket": self.settings.cloudflare_r2_bucket,
-                "Key": key,
-                "ContentType": content_type,
-            },
-            ExpiresIn=self.settings.media_upload_url_ttl_seconds,
-        )
-
     def create_photo_read_url(self, key: str) -> str:
         return self.s3.generate_presigned_url(
             "get_object",
@@ -88,50 +70,24 @@ class CloudflareMediaProvider:
             ExpiresIn=self.settings.media_read_url_ttl_seconds,
         )
 
-    async def inspect_photo(self, key: str) -> StoredObject:
-        def inspect() -> StoredObject:
+    async def upload_photo(
+        self,
+        key: str,
+        content: bytes,
+        content_type: str,
+    ) -> None:
+        def upload() -> None:
             try:
-                head = self.s3.head_object(
+                self.s3.put_object(
                     Bucket=self.settings.cloudflare_r2_bucket,
                     Key=key,
-                )
-                response = self.s3.get_object(
-                    Bucket=self.settings.cloudflare_r2_bucket,
-                    Key=key,
-                    Range="bytes=0-31",
-                )
-                prefix = response["Body"].read(32)
-                response["Body"].close()
-                return StoredObject(
-                    size_bytes=int(head["ContentLength"]),
-                    content_type=str(head.get("ContentType", "")).lower(),
-                    prefix=prefix,
-                )
-            except (BotoCoreError, ClientError, KeyError, TypeError, ValueError) as error:
-                raise MediaProviderError("Unable to verify the R2 photo") from error
-
-        return await asyncio.to_thread(inspect)
-
-    async def promote_photo(self, pending_key: str, final_key: str) -> None:
-        def promote() -> None:
-            try:
-                self.s3.copy_object(
-                    Bucket=self.settings.cloudflare_r2_bucket,
-                    CopySource={
-                        "Bucket": self.settings.cloudflare_r2_bucket,
-                        "Key": pending_key,
-                    },
-                    Key=final_key,
-                    MetadataDirective="COPY",
-                )
-                self.s3.delete_object(
-                    Bucket=self.settings.cloudflare_r2_bucket,
-                    Key=pending_key,
+                    Body=content,
+                    ContentType=content_type,
                 )
             except (BotoCoreError, ClientError) as error:
-                raise MediaProviderError("Unable to finalize the R2 photo") from error
+                raise MediaProviderError("Unable to upload the R2 photo") from error
 
-        await asyncio.to_thread(promote)
+        await asyncio.to_thread(upload)
 
     async def delete_photo(self, key: str) -> None:
         def delete() -> None:

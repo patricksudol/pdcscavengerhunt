@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import UTC, datetime, timedelta
+from urllib.parse import unquote
 from uuid import UUID, uuid4
 
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -49,7 +50,10 @@ MEDIA_CONTENT_TYPES = {
         "image/png": ".png",
         "image/webp": ".webp",
     },
-    MediaType.video: {"video/mp4": ".mp4"},
+    MediaType.video: {
+        "video/mp4": ".mp4",
+        "video/quicktime": ".mov",
+    },
 }
 
 
@@ -164,7 +168,11 @@ def media_audit_json(media: ClueMedia) -> dict:
 
 def valid_media_signature(media_type: MediaType, content_type: str, prefix: bytes) -> bool:
     if media_type == MediaType.video:
-        return content_type == "video/mp4" and len(prefix) >= 12 and prefix[4:8] == b"ftyp"
+        return (
+            content_type in MEDIA_CONTENT_TYPES[MediaType.video]
+            and len(prefix) >= 12
+            and prefix[4:8] == b"ftyp"
+        )
     if content_type == "image/jpeg":
         return prefix.startswith(b"\xff\xd8\xff")
     if content_type == "image/png":
@@ -800,161 +808,51 @@ async def update_clue(request: Request, clue_id: UUID):
         return clue_json(clue, clue_media)
 
 
-@admin_bp.post("/clues/<clue_id:uuid>/media/<media_type:str>/upload")
+@admin_bp.put("/clues/<clue_id:uuid>/media/<media_type:str>")
 @login_required(admin=True)
-async def create_clue_media_upload(
+async def upload_clue_photo(
     request: Request,
     clue_id: UUID,
     media_type: str,
 ):
-    try:
-        selected_type = MediaType(media_type)
-    except ValueError as error:
-        raise NotFound("Media type not found") from error
-    payload = request.json or {}
-    content_type = str(payload.get("content_type", "")).lower()
-    extension = MEDIA_CONTENT_TYPES[selected_type].get(content_type)
+    if media_type != MediaType.photo.value:
+        raise NotFound("Media type not found")
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    extension = MEDIA_CONTENT_TYPES[MediaType.photo].get(content_type)
     if not extension:
-        allowed = ", ".join(MEDIA_CONTENT_TYPES[selected_type])
-        raise InvalidUsage(f"Unsupported {selected_type.value} type. Use {allowed}")
-    try:
-        size_bytes = int(payload.get("size_bytes", 0))
-    except (TypeError, ValueError) as error:
-        raise InvalidUsage("Media size must be an integer") from error
-    max_bytes = (
-        request.app.ctx.settings.photo_max_bytes
-        if selected_type == MediaType.photo
-        else request.app.ctx.settings.video_max_bytes
-    )
-    if size_bytes <= 0:
+        allowed = ", ".join(MEDIA_CONTENT_TYPES[MediaType.photo])
+        raise InvalidUsage(f"Unsupported photo type. Use {allowed}")
+    content = request.body
+    size_bytes = len(content)
+    if not content:
         raise InvalidUsage("The selected media file is empty")
-    if size_bytes > max_bytes:
-        limit_mib = max_bytes // (1024 * 1024)
+    if size_bytes > request.app.ctx.settings.photo_max_bytes:
+        limit_mib = request.app.ctx.settings.photo_max_bytes // (1024 * 1024)
         raise SanicException(
-            f"{selected_type.value.title()} files cannot exceed {limit_mib} MiB",
+            f"Photo files cannot exceed {limit_mib} MiB",
             status_code=413,
         )
-    supplied_name = str(payload.get("original_filename", ""))
+    if not valid_media_signature(MediaType.photo, content_type, content[:32]):
+        raise InvalidUsage("The uploaded file content is not a valid photo")
+
+    supplied_name = unquote(request.headers.get("x-file-name", ""))
     original_filename = "".join(
         character
         for character in supplied_name.replace("\\", "/").rsplit("/", 1)[-1]
         if ord(character) >= 32
-    )[:255] or f"clue-{selected_type.value}{extension}"
+    )[:255] or f"clue-photo{extension}"
+    provider_key = f"photos/{clue_id}/{uuid4().hex}{extension}"
 
     async with request.app.ctx.db.session() as db:
         if not await db.get(Clue, clue_id):
             raise NotFound("Clue not found")
 
     try:
-        if selected_type == MediaType.photo:
-            provider_key = (
-                f"pending/photos/{clue_id}/{uuid4().hex}{extension}"
-            )
-            upload_url = request.app.ctx.media.create_photo_upload_url(
-                provider_key,
-                content_type,
-            )
-            upload_method = "PUT"
-        else:
-            provider_key, upload_url = await request.app.ctx.media.create_video_upload(
-                clue_id=str(clue_id),
-                original_filename=original_filename,
-            )
-            upload_method = "POST"
-    except MediaProviderError as error:
-        raise SanicException(str(error), status_code=502) from error
-
-    upload_token = upload_token_serializer(request).dumps(
-        {
-            "actor_id": str(request.ctx.user.id),
-            "clue_id": str(clue_id),
-            "media_type": selected_type.value,
-            "provider_key": provider_key,
-            "original_filename": original_filename,
-            "content_type": content_type,
-            "size_bytes": size_bytes,
-            "extension": extension,
-        }
-    )
-    if selected_type == MediaType.video:
-        async with request.app.ctx.db.session() as db:
-            db.add(
-                audit(
-                    request,
-                    action="clue.media_upload_started",
-                    entity_type="clue",
-                    entity_id=str(clue_id),
-                    after={
-                        "media_type": "video",
-                        "original_filename": original_filename,
-                        "size_bytes": size_bytes,
-                    },
-                )
-            )
-    return {
-        "upload_url": upload_url,
-        "upload_method": upload_method,
-        "upload_token": upload_token,
-    }
-
-
-@admin_bp.post("/clues/<clue_id:uuid>/media/<media_type:str>/complete")
-@login_required(admin=True)
-async def complete_clue_media_upload(
-    request: Request,
-    clue_id: UUID,
-    media_type: str,
-):
-    try:
-        selected_type = MediaType(media_type)
-    except ValueError as error:
-        raise NotFound("Media type not found") from error
-    token_data = read_upload_token(request, str((request.json or {}).get("upload_token", "")))
-    if (
-        token_data.get("actor_id") != str(request.ctx.user.id)
-        or token_data.get("clue_id") != str(clue_id)
-        or token_data.get("media_type") != selected_type.value
-    ):
-        raise InvalidUsage("This upload does not match the clue")
-    provider_key = str(token_data["provider_key"])
-    content_type = str(token_data["content_type"])
-    expected_size = int(token_data["size_bytes"])
-    original_filename = str(token_data["original_filename"])
-    extension = str(token_data["extension"])
-
-    async with request.app.ctx.db.session() as db:
-        existing = await db.scalar(
-            select(ClueMedia).where(ClueMedia.provider_key == provider_key)
+        await request.app.ctx.media.upload_photo(
+            provider_key,
+            content,
+            content_type,
         )
-        if existing:
-            return media_json(existing)
-
-    promoted_photo = False
-    try:
-        if selected_type == MediaType.photo:
-            stored = await request.app.ctx.media.inspect_photo(provider_key)
-            if stored.size_bytes != expected_size or stored.content_type != content_type:
-                raise InvalidUsage("The uploaded photo does not match the selected file")
-            if not valid_media_signature(selected_type, content_type, stored.prefix):
-                raise InvalidUsage("The uploaded file content is not a valid photo")
-            final_key = f"photos/{clue_id}/{uuid4().hex}{extension}"
-            await request.app.ctx.media.promote_photo(provider_key, final_key)
-            provider_key = final_key
-            actual_size = stored.size_bytes
-            status = "ready"
-            promoted_photo = True
-        else:
-            video = await request.app.ctx.media.video_details(provider_key)
-            actual_size = video.size_bytes or expected_size
-            if actual_size > request.app.ctx.settings.video_max_bytes:
-                await request.app.ctx.media.delete_video(provider_key)
-                raise SanicException(
-                    "Video files cannot exceed "
-                    f"{request.app.ctx.settings.video_max_bytes // (1024 * 1024)} MiB",
-                    status_code=413,
-                )
-            await request.app.ctx.media.secure_video(provider_key)
-            status = video.status
     except MediaProviderError as error:
         raise SanicException(str(error), status_code=502) from error
 
@@ -971,7 +869,7 @@ async def complete_clue_media_upload(
                 select(ClueMedia)
                 .where(
                     ClueMedia.clue_id == clue.id,
-                    ClueMedia.media_type == selected_type,
+                    ClueMedia.media_type == MediaType.photo,
                 )
                 .with_for_update()
             )
@@ -981,19 +879,19 @@ async def complete_clue_media_upload(
                 media.provider_key = provider_key
                 media.original_filename = original_filename
                 media.content_type = content_type
-                media.size_bytes = actual_size
-                media.status = status
+                media.size_bytes = size_bytes
+                media.status = "ready"
                 media.created_by_id = request.ctx.user.id
             else:
                 created = True
                 media = ClueMedia(
                     clue_id=clue.id,
-                    media_type=selected_type,
+                    media_type=MediaType.photo,
                     provider_key=provider_key,
                     original_filename=original_filename,
                     content_type=content_type,
-                    size_bytes=actual_size,
-                    status=status,
+                    size_bytes=size_bytes,
+                    status="ready",
                     created_by_id=request.ctx.user.id,
                 )
                 db.add(media)
@@ -1011,9 +909,182 @@ async def complete_clue_media_upload(
                 )
             )
     except Exception:
-        if promoted_photo:
-            await delete_provider_media(request, MediaType.photo, provider_key)
+        await delete_provider_media(request, MediaType.photo, provider_key)
         raise
+    if old_provider_key and old_provider_key != provider_key:
+        await delete_provider_media(request, MediaType.photo, old_provider_key)
+    return media_json(media), 201 if created else 200
+
+
+@admin_bp.post("/clues/<clue_id:uuid>/media/video/upload")
+@login_required(admin=True)
+async def create_clue_video_upload(
+    request: Request,
+    clue_id: UUID,
+):
+    selected_type = MediaType.video
+    payload = request.json or {}
+    content_type = str(payload.get("content_type", "")).lower()
+    extension = MEDIA_CONTENT_TYPES[selected_type].get(content_type)
+    if not extension:
+        allowed = ", ".join(MEDIA_CONTENT_TYPES[selected_type])
+        raise InvalidUsage(f"Unsupported video type. Use {allowed}")
+    try:
+        size_bytes = int(payload.get("size_bytes", 0))
+    except (TypeError, ValueError) as error:
+        raise InvalidUsage("Media size must be an integer") from error
+    max_bytes = request.app.ctx.settings.video_max_bytes
+    if size_bytes <= 0:
+        raise InvalidUsage("The selected media file is empty")
+    if size_bytes > max_bytes:
+        limit_mib = max_bytes // (1024 * 1024)
+        raise SanicException(
+            f"Video files cannot exceed {limit_mib} MiB",
+            status_code=413,
+        )
+    supplied_name = str(payload.get("original_filename", ""))
+    original_filename = "".join(
+        character
+        for character in supplied_name.replace("\\", "/").rsplit("/", 1)[-1]
+        if ord(character) >= 32
+    )[:255] or f"clue-video{extension}"
+
+    async with request.app.ctx.db.session() as db:
+        if not await db.get(Clue, clue_id):
+            raise NotFound("Clue not found")
+
+    try:
+        provider_key, upload_url = await request.app.ctx.media.create_video_upload(
+            clue_id=str(clue_id),
+            original_filename=original_filename,
+        )
+    except MediaProviderError as error:
+        raise SanicException(str(error), status_code=502) from error
+
+    upload_token = upload_token_serializer(request).dumps(
+        {
+            "actor_id": str(request.ctx.user.id),
+            "clue_id": str(clue_id),
+            "media_type": selected_type.value,
+            "provider_key": provider_key,
+            "original_filename": original_filename,
+            "content_type": content_type,
+            "size_bytes": size_bytes,
+        }
+    )
+    async with request.app.ctx.db.session() as db:
+        db.add(
+            audit(
+                request,
+                action="clue.media_upload_started",
+                entity_type="clue",
+                entity_id=str(clue_id),
+                after={
+                    "media_type": "video",
+                    "original_filename": original_filename,
+                    "size_bytes": size_bytes,
+                },
+            )
+        )
+    return {
+        "upload_url": upload_url,
+        "upload_method": "POST",
+        "upload_token": upload_token,
+    }
+
+
+@admin_bp.post("/clues/<clue_id:uuid>/media/video/complete")
+@login_required(admin=True)
+async def complete_clue_video_upload(
+    request: Request,
+    clue_id: UUID,
+):
+    selected_type = MediaType.video
+    token_data = read_upload_token(request, str((request.json or {}).get("upload_token", "")))
+    if (
+        token_data.get("actor_id") != str(request.ctx.user.id)
+        or token_data.get("clue_id") != str(clue_id)
+        or token_data.get("media_type") != selected_type.value
+    ):
+        raise InvalidUsage("This upload does not match the clue")
+    provider_key = str(token_data["provider_key"])
+    content_type = str(token_data["content_type"])
+    expected_size = int(token_data["size_bytes"])
+    original_filename = str(token_data["original_filename"])
+
+    async with request.app.ctx.db.session() as db:
+        existing = await db.scalar(
+            select(ClueMedia).where(ClueMedia.provider_key == provider_key)
+        )
+        if existing:
+            return media_json(existing)
+
+    try:
+        video = await request.app.ctx.media.video_details(provider_key)
+        actual_size = video.size_bytes or expected_size
+        if actual_size > request.app.ctx.settings.video_max_bytes:
+            await request.app.ctx.media.delete_video(provider_key)
+            raise SanicException(
+                "Video files cannot exceed "
+                f"{request.app.ctx.settings.video_max_bytes // (1024 * 1024)} MiB",
+                status_code=413,
+            )
+        await request.app.ctx.media.secure_video(provider_key)
+        status = video.status
+    except MediaProviderError as error:
+        raise SanicException(str(error), status_code=502) from error
+
+    old_provider_key = None
+    created = False
+    async with request.app.ctx.db.session() as db:
+        clue = await db.scalar(
+            select(Clue).where(Clue.id == clue_id).with_for_update()
+        )
+        if not clue:
+            raise NotFound("Clue not found")
+        media = await db.scalar(
+            select(ClueMedia)
+            .where(
+                ClueMedia.clue_id == clue.id,
+                ClueMedia.media_type == selected_type,
+            )
+            .with_for_update()
+        )
+        before = media_audit_json(media) if media else None
+        if media:
+            old_provider_key = media.provider_key
+            media.provider_key = provider_key
+            media.original_filename = original_filename
+            media.content_type = content_type
+            media.size_bytes = actual_size
+            media.status = status
+            media.created_by_id = request.ctx.user.id
+        else:
+            created = True
+            media = ClueMedia(
+                clue_id=clue.id,
+                media_type=selected_type,
+                provider_key=provider_key,
+                original_filename=original_filename,
+                content_type=content_type,
+                size_bytes=actual_size,
+                status=status,
+                created_by_id=request.ctx.user.id,
+            )
+            db.add(media)
+        await db.flush()
+        db.add(
+            audit(
+                request,
+                action=(
+                    "clue.media_attached" if created else "clue.media_replaced"
+                ),
+                entity_type="clue",
+                entity_id=str(clue.id),
+                before=before,
+                after=media_audit_json(media),
+            )
+        )
     if old_provider_key and old_provider_key != provider_key:
         await delete_provider_media(request, selected_type, old_provider_key)
     return media_json(media), 201 if created else 200

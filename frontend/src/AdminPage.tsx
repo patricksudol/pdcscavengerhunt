@@ -952,30 +952,30 @@ function MediaAttachmentEditor({
       file: File;
     }) => {
       const path = `/api/v1/admin/clues/${clue.id}/media/${mediaType}`;
+      if (mediaType === "photo") {
+        return api<ClueMedia>(path, {
+          method: "PUT",
+          body: file,
+          headers: {
+            "Content-Type": file.type,
+            "X-File-Name": encodeURIComponent(file.name),
+          },
+        });
+      }
       const uploadDetails = await postJson<{
         upload_url: string;
-        upload_method: "PUT" | "POST";
+        upload_method: "POST";
         upload_token: string;
       }>(`${path}/upload`, {
         original_filename: file.name,
         content_type: file.type,
         size_bytes: file.size,
       });
-      const body: BodyInit =
-        uploadDetails.upload_method === "PUT"
-          ? file
-          : (() => {
-              const form = new FormData();
-              form.append("file", file);
-              return form;
-            })();
+      const body = new FormData();
+      body.append("file", file);
       const response = await fetch(uploadDetails.upload_url, {
         method: uploadDetails.upload_method,
         body,
-        headers:
-          uploadDetails.upload_method === "PUT"
-            ? { "Content-Type": file.type }
-            : undefined,
       });
       if (!response.ok) {
         throw new Error("Cloudflare could not receive this media file");
@@ -1054,7 +1054,7 @@ function MediaAttachmentEditor({
       </div>
       <div>
         <strong>Video</strong>
-        <small>Web-compatible MP4 · maximum 100 MiB</small>
+        <small>MP4 or MOV · maximum 100 MiB</small>
         {video && (
           <div className="media-editor__preview">
             {video.status === "ready" ? (
@@ -1079,7 +1079,7 @@ function MediaAttachmentEditor({
             <Upload /> {video ? "Replace video" : "Upload video"}
             <input
               type="file"
-              accept="video/mp4"
+              accept="video/mp4,video/quicktime,.mp4,.mov"
               disabled={upload.isPending}
               onChange={(event) => {
                 chooseMedia("video", event.target.files?.[0]);

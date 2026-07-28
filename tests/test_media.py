@@ -5,7 +5,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 
-from pdcscavengerhunt.cloudflare_media import StoredObject, StreamVideo
+from pdcscavengerhunt.cloudflare_media import StreamVideo
 from pdcscavengerhunt.models import (
     AuditEvent,
     Clue,
@@ -29,23 +29,19 @@ class FakeMediaProvider:
     videos: dict[str, StreamVideo] = field(default_factory=dict)
     deleted_photos: list[str] = field(default_factory=list)
     deleted_videos: list[str] = field(default_factory=list)
-    last_photo_key: str | None = None
     last_video_uid: str | None = None
     webhook_payload: dict = field(default_factory=dict)
 
-    def create_photo_upload_url(self, key: str, _content_type: str) -> str:
-        self.last_photo_key = key
-        return f"https://r2.example/{key}"
+    async def upload_photo(
+        self,
+        key: str,
+        content: bytes,
+        content_type: str,
+    ) -> None:
+        self.photos[key] = (content, content_type)
 
     def create_photo_read_url(self, key: str) -> str:
         return f"https://r2.example/read/{key}?signed=true"
-
-    async def inspect_photo(self, key: str) -> StoredObject:
-        content, content_type = self.photos[key]
-        return StoredObject(len(content), content_type, content[:32])
-
-    async def promote_photo(self, pending_key: str, final_key: str) -> None:
-        self.photos[final_key] = self.photos.pop(pending_key)
 
     async def delete_photo(self, key: str) -> None:
         self.photos.pop(key, None)
@@ -130,6 +126,17 @@ async def upload_media(
 ):
     cookies, headers = auth(app, admin)
     path = f"/api/v1/admin/clues/{clue.id}/media/{media_type}"
+    if media_type == "photo":
+        return await app.asgi_client.put(
+            path,
+            content=content,
+            cookies=cookies,
+            headers={
+                **headers,
+                "Content-Type": content_type,
+                "X-File-Name": filename,
+            },
+        )
     _request, initiated = await app.asgi_client.post(
         f"{path}/upload",
         json={
@@ -141,16 +148,12 @@ async def upload_media(
         headers=headers,
     )
     assert initiated.status == 200
-    if media_type == "photo":
-        assert provider.last_photo_key
-        provider.photos[provider.last_photo_key] = (content, content_type)
-    else:
-        assert provider.last_video_uid
-        provider.videos[provider.last_video_uid] = StreamVideo(
-            len(content),
-            video_status,
-            video_status == "ready",
-        )
+    assert provider.last_video_uid
+    provider.videos[provider.last_video_uid] = StreamVideo(
+        len(content),
+        video_status,
+        video_status == "ready",
+    )
     return await app.asgi_client.post(
         f"{path}/complete",
         json={"upload_token": initiated.json["upload_token"]},
@@ -170,12 +173,20 @@ async def test_admin_uploads_cloudflare_media_and_player_gets_private_redirects(
         app, admin, provider, clues[0], "photo", PHOTO_BYTES, "image/png", "map.png"
     )
     _request, video = await upload_media(
-        app, admin, provider, clues[0], "video", VIDEO_BYTES, "video/mp4", "welcome.mp4"
+        app,
+        admin,
+        provider,
+        clues[0],
+        "video",
+        VIDEO_BYTES,
+        "video/quicktime",
+        "welcome.mov",
     )
     assert photo.status == 201
     assert video.status == 201
     assert photo.json["status"] == "ready"
     assert video.json["status"] == "ready"
+    assert video.json["content_type"] == "video/quicktime"
 
     player_cookies, _headers = auth(app, player)
     _request, state = await app.asgi_client.get(
@@ -294,28 +305,28 @@ async def test_upload_rejects_invalid_type_signature_and_size(app, admin):
     cookies, headers = auth(app, admin)
     path = f"/api/v1/admin/clues/{clues[0].id}/media/photo"
 
-    _request, bad_type = await app.asgi_client.post(
-        f"{path}/upload",
-        json={
-            "original_filename": "unsafe.svg",
-            "content_type": "image/svg+xml",
-            "size_bytes": 100,
-        },
+    _request, bad_type = await app.asgi_client.put(
+        path,
+        content=b"<svg>",
         cookies=cookies,
-        headers=headers,
+        headers={
+            **headers,
+            "Content-Type": "image/svg+xml",
+            "X-File-Name": "unsafe.svg",
+        },
     )
     assert bad_type.status == 400
 
     app.ctx.settings.photo_max_bytes = len(PHOTO_BYTES) - 1
-    _request, too_large = await app.asgi_client.post(
-        f"{path}/upload",
-        json={
-            "original_filename": "large.png",
-            "content_type": "image/png",
-            "size_bytes": len(PHOTO_BYTES),
-        },
+    _request, too_large = await app.asgi_client.put(
+        path,
+        content=PHOTO_BYTES,
         cookies=cookies,
-        headers=headers,
+        headers={
+            **headers,
+            "Content-Type": "image/png",
+            "X-File-Name": "large.png",
+        },
     )
     assert too_large.status == 413
     app.ctx.settings.photo_max_bytes = 8 * 1024 * 1024

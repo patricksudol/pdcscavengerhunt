@@ -150,12 +150,13 @@ clue is available to the signed-in player. Administrators can upload, replace,
 preview, and remove attachments from the clue editor.
 
 - Photos: JPEG, PNG, or WebP, up to 8 MiB
-- Videos: MP4, up to 100 MiB
+- Videos: MP4 or MOV, up to 100 MiB
 
-Photos are uploaded directly from the administrator's browser to a private
-Cloudflare R2 bucket. Videos upload directly to Cloudflare Stream, which encodes
-them and supplies an adaptive browser player. The Render web service therefore
-does not store or relay the file bodies.
+Photos are uploaded through the Render web service into a private Cloudflare R2
+bucket. The 8 MiB limit keeps this request small and avoids mobile browser
+cross-origin upload failures. Videos upload directly to Cloudflare Stream, which
+encodes them and supplies an adaptive browser player. Render never stores media
+on its filesystem.
 
 The application keeps media metadata and clue access rules in PostgreSQL. When a
 player reaches a clue, the application redirects the photo to a short-lived
@@ -229,34 +230,18 @@ application uses Render's private connection string.
    `pdc-clue-media`.
 2. Create an R2 API token scoped to Object Read & Write for that bucket. Copy its
    access key ID and secret access key into the corresponding Render variables.
-3. Add this CORS policy to the bucket, replacing the origin with the exact
-   `PDC_PUBLIC_BASE_URL` value:
-
-```json
-[
-  {
-    "AllowedOrigins": ["https://your-app.example"],
-    "AllowedMethods": ["PUT"],
-    "AllowedHeaders": ["Content-Type"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
-
-4. Add an R2 lifecycle rule that deletes objects under `pending/photos/` after
-   one day. Completed photos are moved to `photos/`; this removes abandoned
-   direct uploads.
-5. Enable Cloudflare Stream and create an API token with Stream Read and Stream
+3. Enable Cloudflare Stream and create an API token with Stream Read and Stream
    Write. Copy the full Stream customer subdomain shown in the Stream dashboard.
-6. Create a Stream webhook targeting
+4. Create a Stream webhook targeting
    `https://your-app.example/api/v1/media/cloudflare-stream/webhook`. Copy its
    signing secret into a new secret Render environment variable named
    `PDC_CLOUDFLARE_STREAM_WEBHOOK_SECRET`, then redeploy. This step happens after
    Render has assigned the service its final hostname.
 
 Keep the R2 bucket private. The browser receives time-limited presigned URLs, not
-the R2 credentials, and Stream videos require signed playback URLs.
+the R2 credentials, and Stream videos require signed playback URLs. An R2 CORS
+rule and a `pending/photos/` lifecycle rule are no longer required because photo
+uploads pass through Render.
 
 Create the GitHub repository, push this project to its `main` branch, connect the
 repository to a new Render Blueprint, and populate the prompted secrets.
