@@ -75,6 +75,8 @@ export interface AdminGameDetail extends AdminGame {
     user: AdminUser;
     completed_count: number;
     completed_clue_ids: string[];
+    completion_rank: number | null;
+    finished_at: string | null;
     completions: {
       clue_id: string;
       completed_at: string;

@@ -628,6 +628,19 @@ textarea:focus-visible, select:focus-visible {
 .progress-player__summary { display: flex; align-items: center; gap: .8rem; }
 .progress-player__identity { display: flex; flex-direction: column; min-width: 170px; }
 .progress-list small { color: var(--muted); }
+.finish-rank { min-width: 84px; display: inline-flex; align-items: center; gap: .4rem; padding: .35rem .5rem; border: 1px solid transparent; }
+.finish-rank > svg { width: 27px; height: 27px; flex: 0 0 auto; stroke-width: 1.8; }
+.finish-rank > b { width: 27px; height: 27px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 50%; background: var(--navy); color: white; font-size: .68rem; }
+.finish-rank > span { display: flex; flex-direction: column; line-height: 1.05; }
+.finish-rank strong { font-size: .76rem; }
+.finish-rank small { margin-top: .12rem; font-size: .55rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.finish-rank--gold { background: #fff3c4; border-color: #e3b93f; color: #765000; }
+.finish-rank--gold > svg { fill: #f4bd32; stroke: #765000; }
+.finish-rank--silver { background: #edf1f4; border-color: #aeb9c1; color: #43525d; }
+.finish-rank--silver > svg { fill: #c7d0d6; stroke: #43525d; }
+.finish-rank--bronze { background: #f5dfd0; border-color: #bd815c; color: #754226; }
+.finish-rank--bronze > svg { fill: #c9855c; stroke: #754226; }
+.finish-rank--numbered { background: #e7f1fb; border-color: #a8c7dd; color: var(--navy); }
 .mini-progress { display: flex; align-items: center; gap: .6rem; flex: 1; }
 .mini-progress > div { flex: 1; }
 .completion-timeline { list-style: none; margin: 1rem 0 0 44px; padding: 0; border-left: 2px solid #d9e6ee; }

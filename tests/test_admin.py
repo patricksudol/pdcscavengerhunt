@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -178,11 +178,89 @@ async def test_admin_game_detail_includes_clue_completion_timestamps(app, admin)
     assert response.status == 200
     player_progress = response.json["players"][0]
     assert player_progress["completed_clue_ids"] == [str(clue_id)]
+    assert player_progress["completion_rank"] == 1
+    assert player_progress["finished_at"] == completed_at.isoformat()
     assert player_progress["completions"] == [
         {
             "clue_id": str(clue_id),
             "completed_at": completed_at.isoformat(),
         }
+    ]
+
+
+async def test_admin_ranks_every_finisher_by_final_completion_time(app, admin):
+    started_at = datetime(2026, 7, 28, 14, 0, tzinfo=UTC)
+    async with app.ctx.db.session() as db:
+        game = Game(title="Ranked Game", status="open")
+        db.add(game)
+        await db.flush()
+        clue = Clue(
+            game_id=game.id,
+            position=1,
+            title="Finish",
+            content="Finished",
+            code_fingerprint=fingerprint_code("RANKED-FINISH", app.ctx.settings),
+        )
+        players = [
+            User(
+                email_address=f"rank-{number}@example.com",
+                normalized_email_address=f"rank-{number}@example.com",
+                full_name=f"Rank Player {number}",
+            )
+            for number in range(1, 6)
+        ]
+        db.add_all([clue, *players])
+        await db.flush()
+        memberships = [
+            GamePlayer(game_id=game.id, user_id=player.id)
+            for player in players
+        ]
+        db.add_all(memberships)
+        await db.flush()
+        finish_minutes = [40, 10, 30, 20]
+        db.add_all(
+            [
+                ClueCompletion(
+                    game_player_id=membership.id,
+                    clue_id=clue.id,
+                    completed_at=started_at + timedelta(minutes=minutes),
+                )
+                for membership, minutes in zip(
+                    memberships[:4],
+                    finish_minutes,
+                    strict=True,
+                )
+            ]
+        )
+        game_id = game.id
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.get(
+        f"/api/v1/admin/games/{game_id}",
+        cookies=cookies,
+        headers=headers,
+    )
+
+    assert response.status == 200
+    progress_by_email = {
+        entry["user"]["email_address"]: entry for entry in response.json["players"]
+    }
+    assert {
+        email: entry["completion_rank"]
+        for email, entry in progress_by_email.items()
+    } == {
+        "rank-1@example.com": 4,
+        "rank-2@example.com": 1,
+        "rank-3@example.com": 3,
+        "rank-4@example.com": 2,
+        "rank-5@example.com": None,
+    }
+    assert [entry["completion_rank"] for entry in response.json["players"]] == [
+        1,
+        2,
+        3,
+        4,
+        None,
     ]
 
 

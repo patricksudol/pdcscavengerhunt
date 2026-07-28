@@ -375,6 +375,11 @@ async def get_game(request: Request, game_id: UUID):
             completed_clue_ids = [
                 completion["clue_id"] for completion in completions
             ]
+            finished_at = (
+                completions[-1]["completed_at"]
+                if clues and len(completions) == len(clues)
+                else None
+            )
             progress.append(
                 {
                     "membership_id": str(membership.id),
@@ -382,8 +387,27 @@ async def get_game(request: Request, game_id: UUID):
                     "completed_count": len(completions),
                     "completed_clue_ids": completed_clue_ids,
                     "completions": completions,
+                    "finished_at": finished_at,
+                    "completion_rank": None,
                 }
             )
+        finishers = sorted(
+            (item for item in progress if item["finished_at"] is not None),
+            key=lambda item: (
+                item["finished_at"],
+                item["user"]["full_name"].casefold(),
+                item["membership_id"],
+            ),
+        )
+        for rank, item in enumerate(finishers, start=1):
+            item["completion_rank"] = rank
+        progress.sort(
+            key=lambda item: (
+                item["completion_rank"] is None,
+                item["completion_rank"] or 0,
+                item["user"]["full_name"].casefold(),
+            )
+        )
         return {
             **game_json(
                 game,

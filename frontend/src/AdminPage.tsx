@@ -31,6 +31,7 @@ import {
   ListChecks,
   LockKeyhole,
   LogOut,
+  Medal,
   Menu,
   Pencil,
   Plus,
@@ -586,13 +587,23 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
   const cluesById = new Map(game.clues.map((clue) => [clue.id, clue]));
   return (
     <div className="drawer-section">
-      <div className="drawer-section__title"><div><h3>Player progress</h3><p>See when each clue was solved. Times are shown in Eastern Time.</p></div></div>
+      <div className="drawer-section__title"><div><h3>Player progress</h3><p>Finishers are ranked by their final clue. Times are shown in Eastern Time.</p></div></div>
       {!game.players.length ? <EmptyState icon={<Users />} title="No assigned players">Assign players to begin tracking progress.</EmptyState> :
         <div className="progress-list">{game.players.map((entry) => (
           <article className="progress-player" key={entry.user.id}>
             <div className="progress-player__summary">
               <span className="avatar">{initials(entry.user.full_name)}</span>
               <span className="progress-player__identity"><strong>{entry.user.full_name}</strong><small>{entry.user.email_address}</small></span>
+              {entry.completion_rank && (
+                <span
+                  className={`finish-rank finish-rank--${rankStyle(entry.completion_rank)}`}
+                  aria-label={`${ordinal(entry.completion_rank)} place`}
+                  title={entry.finished_at ? `Finished ${formatDate(entry.finished_at)}` : undefined}
+                >
+                  {entry.completion_rank <= 3 ? <Medal aria-hidden="true" /> : <b>#{entry.completion_rank}</b>}
+                  <span><strong>{ordinal(entry.completion_rank)}</strong><small>place</small></span>
+                </span>
+              )}
               <div className="mini-progress"><div><span style={{ width: `${game.clue_count ? (entry.completed_count / game.clue_count) * 100 : 0}%` }} /></div><small>{entry.completed_count} / {game.clue_count}</small></div>
               {entry.completed_count > 0 && <Button variant="quiet" onClick={() => setResetting(entry)}>Reset…</Button>}
             </div>
@@ -627,6 +638,17 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
       )}
     </div>
   );
+}
+
+function rankStyle(rank: number): "gold" | "silver" | "bronze" | "numbered" {
+  return rank === 1 ? "gold" : rank === 2 ? "silver" : rank === 3 ? "bronze" : "numbered";
+}
+
+function ordinal(value: number): string {
+  const lastTwoDigits = value % 100;
+  if (lastTwoDigits >= 11 && lastTwoDigits <= 13) return `${value}th`;
+  const suffix = value % 10 === 1 ? "st" : value % 10 === 2 ? "nd" : value % 10 === 3 ? "rd" : "th";
+  return `${value}${suffix}`;
 }
 
 function ProgressResetEditor({
