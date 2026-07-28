@@ -6,7 +6,7 @@ from uuid import UUID
 
 from sanic import Blueprint, Request
 from sanic.exceptions import InvalidUsage, NotFound, SanicException
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from .auth import setup_token_hash
 from .models import (
@@ -25,6 +25,7 @@ from .schemas import (
     GameCreate,
     GameUpdate,
     MembershipUpdate,
+    ProgressReset,
     UserCreate,
     UserUpdate,
 )
@@ -577,11 +578,23 @@ async def delete_clue(request: Request, clue_id: UUID):
         position = clue.position
         await db.delete(clue)
         await db.flush()
-        await db.execute(
-            update(Clue)
-            .where(Clue.game_id == game_id, Clue.position > position)
-            .values(position=Clue.position - 1)
+        affected = list(
+            (
+                await db.scalars(
+                    select(Clue)
+                    .where(Clue.game_id == game_id, Clue.position > position)
+                    .order_by(Clue.position)
+                    .with_for_update()
+                )
+            ).all()
         )
+        original_positions = {item.id: item.position for item in affected}
+        offset = len(affected) + 1000
+        for item in affected:
+            item.position += offset
+        await db.flush()
+        for item in affected:
+            item.position = original_positions[item.id] - 1
         db.add(
             audit(
                 request,
@@ -592,3 +605,35 @@ async def delete_clue(request: Request, clue_id: UUID):
             )
         )
         return {"deleted": True}
+
+
+@admin_bp.delete("/game-players/<membership_id:uuid>/progress")
+@login_required(admin=True)
+async def reset_progress(request: Request, membership_id: UUID):
+    payload = ProgressReset.model_validate(request.json or {})
+    async with request.app.ctx.db.session() as db:
+        membership = await db.get(GamePlayer, membership_id)
+        if not membership:
+            raise NotFound("Game assignment not found")
+        completion_count = await db.scalar(
+            select(func.count(ClueCompletion.id)).where(
+                ClueCompletion.game_player_id == membership.id
+            )
+        )
+        await db.execute(
+            delete(ClueCompletion).where(
+                ClueCompletion.game_player_id == membership.id
+            )
+        )
+        db.add(
+            audit(
+                request,
+                action="player.progress_reset",
+                entity_type="game_player",
+                entity_id=str(membership.id),
+                before={"completion_count": completion_count or 0},
+                after={"completion_count": 0},
+                reason=payload.reason.strip(),
+            )
+        )
+        return {"reset": True, "completion_count": 0}

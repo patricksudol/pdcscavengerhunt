@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from sqlalchemy import select
 
-from pdcscavengerhunt.models import AuditEvent, Clue, Game, GamePlayer, User
+from pdcscavengerhunt.models import (
+    AuditEvent,
+    Clue,
+    ClueCompletion,
+    Game,
+    GamePlayer,
+    User,
+)
+from pdcscavengerhunt.security import fingerprint_code
 
 from .conftest import auth
 
@@ -76,7 +86,7 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
     assert opened.json["status"] == "open"
 
     async with app.ctx.db.session() as db:
-        game = await db.get(Game, game_id)
+        game = await db.get(Game, UUID(game_id))
         membership_row = await db.scalar(
             select(GamePlayer).where(GamePlayer.game_id == game.id)
         )
@@ -109,3 +119,50 @@ async def test_admin_cannot_remove_own_admin_access(app, admin):
             headers=headers,
         )
         assert response.status == 400
+
+
+async def test_admin_can_reset_player_progress_with_reason(app, admin):
+    async with app.ctx.db.session() as db:
+        player = User(
+            username="reset-player",
+            normalized_username="reset-player",
+            display_name="Reset Player",
+        )
+        game = Game(title="Reset Game", status="open")
+        db.add_all([player, game])
+        await db.flush()
+        membership = GamePlayer(game_id=game.id, user_id=player.id)
+        clue = Clue(
+            game_id=game.id,
+            position=1,
+            title="Reset Clue",
+            content="Reset content",
+            code_fingerprint=fingerprint_code("RESET-CODE", app.ctx.settings),
+        )
+        db.add_all([membership, clue])
+        await db.flush()
+        db.add(
+            ClueCompletion(
+                game_player_id=membership.id,
+                clue_id=clue.id,
+            )
+        )
+        membership_id = membership.id
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.request(
+        "DELETE",
+        f"/api/v1/admin/game-players/{membership_id}/progress",
+        json={"reason": "Player requested a restart"},
+        cookies=cookies,
+        headers=headers,
+    )
+    assert response.status == 200
+
+    async with app.ctx.db.session() as db:
+        assert await db.scalar(select(ClueCompletion)) is None
+        event = await db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "player.progress_reset")
+        )
+        assert event
+        assert event.reason == "Player requested a restart"

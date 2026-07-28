@@ -26,9 +26,13 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("normalized_username"),
     )
-    op.create_index("ix_users_normalized_username", "users", ["normalized_username"])
+    op.create_index(
+        "ix_users_normalized_username",
+        "users",
+        ["normalized_username"],
+        unique=True,
+    )
 
     op.create_table(
         "password_setup_tokens",
@@ -42,13 +46,15 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["created_by_id"], ["users.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("token_hash"),
     )
     op.create_index(
         "ix_password_setup_tokens_user_id", "password_setup_tokens", ["user_id"]
     )
     op.create_index(
-        "ix_password_setup_tokens_token_hash", "password_setup_tokens", ["token_hash"]
+        "ix_password_setup_tokens_token_hash",
+        "password_setup_tokens",
+        ["token_hash"],
+        unique=True,
     )
     op.create_index(
         "ix_password_setup_tokens_expires_at", "password_setup_tokens", ["expires_at"]

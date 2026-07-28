@@ -69,3 +69,6 @@ class CodeSubmission(BaseModel):
 class MembershipUpdate(BaseModel):
     user_ids: list[str]
 
+
+class ProgressReset(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)

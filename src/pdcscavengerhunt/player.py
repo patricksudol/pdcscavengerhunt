@@ -16,7 +16,12 @@ from .models import (
     GameStatus,
 )
 from .schemas import CodeSubmission
-from .security import check_rate_limit, fingerprint_code, login_required
+from .security import (
+    check_rate_limit,
+    clear_rate_limit,
+    fingerprint_code,
+    login_required,
+)
 
 player_bp = Blueprint("player", url_prefix="/api/v1/player")
 
@@ -149,6 +154,8 @@ async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
         identity=str(request.ctx.user.id),
         limit=request.app.ctx.settings.code_rate_limit,
     )
+    incorrect_code = False
+    result: dict | None = None
     async with request.app.ctx.db.session() as db:
         game = await db.get(Game, game_id)
         membership = await membership_for(
@@ -199,25 +206,33 @@ async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
                     request_id=request.ctx.request_id,
                 )
             )
-            raise InvalidUsage("That code is not correct")
-        completion = ClueCompletion(
-            game_player_id=membership.id,
-            clue_id=target.id,
-        )
-        db.add(completion)
-        await db.flush()
-        db.add(
-            AuditEvent(
-                actor_id=request.ctx.user.id,
-                action="clue.completed",
-                entity_type="clue",
-                entity_id=str(target.id),
-                after={"game_id": str(game.id), "position": target.position},
-                request_id=request.ctx.request_id,
+            incorrect_code = True
+        else:
+            completion = ClueCompletion(
+                game_player_id=membership.id,
+                clue_id=target.id,
             )
-        )
-        return {
-            "created": True,
-            "game": await game_state(db, game, membership),
-        }
-
+            db.add(completion)
+            await db.flush()
+            db.add(
+                AuditEvent(
+                    actor_id=request.ctx.user.id,
+                    action="clue.completed",
+                    entity_type="clue",
+                    entity_id=str(target.id),
+                    after={"game_id": str(game.id), "position": target.position},
+                    request_id=request.ctx.request_id,
+                )
+            )
+            result = {
+                "created": True,
+                "game": await game_state(db, game, membership),
+            }
+    if incorrect_code:
+        raise InvalidUsage("That code is not correct")
+    clear_rate_limit(
+        request,
+        namespace="clue-code",
+        identity=str(request.ctx.user.id),
+    )
+    return result
