@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -134,6 +135,55 @@ async def test_admin_cannot_remove_own_admin_access(app, admin):
             headers=headers,
         )
         assert response.status == 400
+
+
+async def test_admin_game_detail_includes_clue_completion_timestamps(app, admin):
+    completed_at = datetime(2026, 7, 28, 14, 35, tzinfo=UTC)
+    async with app.ctx.db.session() as db:
+        player = User(
+            email_address="timestamp-player@example.com",
+            normalized_email_address="timestamp-player@example.com",
+            full_name="Timestamp Player",
+        )
+        game = Game(title="Timestamp Game", status="open")
+        db.add_all([player, game])
+        await db.flush()
+        membership = GamePlayer(game_id=game.id, user_id=player.id)
+        clue = Clue(
+            game_id=game.id,
+            position=1,
+            title="Timestamp Clue",
+            content="Timestamp content",
+            code_fingerprint=fingerprint_code("TIMESTAMP-CODE", app.ctx.settings),
+        )
+        db.add_all([membership, clue])
+        await db.flush()
+        db.add(
+            ClueCompletion(
+                game_player_id=membership.id,
+                clue_id=clue.id,
+                completed_at=completed_at,
+            )
+        )
+        game_id = game.id
+        clue_id = clue.id
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.get(
+        f"/api/v1/admin/games/{game_id}",
+        cookies=cookies,
+        headers=headers,
+    )
+
+    assert response.status == 200
+    player_progress = response.json["players"][0]
+    assert player_progress["completed_clue_ids"] == [str(clue_id)]
+    assert player_progress["completions"] == [
+        {
+            "clue_id": str(clue_id),
+            "completed_at": completed_at.isoformat(),
+        }
+    ]
 
 
 async def test_admin_can_edit_full_name_and_email_address(app, admin):

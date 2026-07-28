@@ -23,6 +23,7 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Clock3,
   Clipboard,
   Gamepad2,
   GripVertical,
@@ -46,6 +47,7 @@ import {
   AdminGameDetail,
   AdminUser,
   api,
+  formatDate,
   Me,
   postJson,
   setCsrfToken,
@@ -579,19 +581,41 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
   );
 }
 
-function ProgressEditor({ game }: { game: AdminGameDetail }) {
+export function ProgressEditor({ game }: { game: AdminGameDetail }) {
   const [resetting, setResetting] = useState<AdminGameDetail["players"][number] | null>(null);
+  const cluesById = new Map(game.clues.map((clue) => [clue.id, clue]));
   return (
     <div className="drawer-section">
-      <div className="drawer-section__title"><div><h3>Player progress</h3><p>Reset a player to any completed clue or restart the entire game.</p></div></div>
+      <div className="drawer-section__title"><div><h3>Player progress</h3><p>See when each clue was solved. Times are shown in Eastern Time.</p></div></div>
       {!game.players.length ? <EmptyState icon={<Users />} title="No assigned players">Assign players to begin tracking progress.</EmptyState> :
         <div className="progress-list">{game.players.map((entry) => (
-          <div key={entry.user.id}>
-            <span className="avatar">{initials(entry.user.full_name)}</span>
-            <span><strong>{entry.user.full_name}</strong><small>{entry.user.email_address}</small></span>
-            <div className="mini-progress"><div><span style={{ width: `${game.clue_count ? (entry.completed_count / game.clue_count) * 100 : 0}%` }} /></div><small>{entry.completed_count} / {game.clue_count}</small></div>
-            {entry.completed_count > 0 && <Button variant="quiet" onClick={() => setResetting(entry)}>Reset…</Button>}
-          </div>
+          <article className="progress-player" key={entry.user.id}>
+            <div className="progress-player__summary">
+              <span className="avatar">{initials(entry.user.full_name)}</span>
+              <span className="progress-player__identity"><strong>{entry.user.full_name}</strong><small>{entry.user.email_address}</small></span>
+              <div className="mini-progress"><div><span style={{ width: `${game.clue_count ? (entry.completed_count / game.clue_count) * 100 : 0}%` }} /></div><small>{entry.completed_count} / {game.clue_count}</small></div>
+              {entry.completed_count > 0 && <Button variant="quiet" onClick={() => setResetting(entry)}>Reset…</Button>}
+            </div>
+            {entry.completions.length > 0 ? (
+              <ol className="completion-timeline">
+                {entry.completions.map((completion) => {
+                  const clue = cluesById.get(completion.clue_id);
+                  return (
+                    <li key={completion.clue_id}>
+                      <span className="completion-timeline__marker"><Check /></span>
+                      <span className="completion-timeline__clue">
+                        <small>Clue {clue?.position ?? "—"}</small>
+                        <strong>{clue?.title ?? "Deleted clue"}</strong>
+                      </span>
+                      <time dateTime={completion.completed_at}><Clock3 /> {formatDate(completion.completed_at)}</time>
+                    </li>
+                  );
+                })}
+              </ol>
+            ) : (
+              <p className="progress-player__empty">No clues solved yet.</p>
+            )}
+          </article>
         ))}</div>
       }
       {resetting && (

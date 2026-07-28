@@ -351,23 +351,37 @@ async def get_game(request: Request, game_id: UUID):
         )
         progress = []
         for membership, user in members:
-            completed_clue_ids = list(
-                (
-                    await db.scalars(
-                        select(ClueCompletion.clue_id).where(
-                            ClueCompletion.game_player_id == membership.id
-                        )
+            completion_rows = (
+                await db.execute(
+                    select(
+                        ClueCompletion.clue_id,
+                        ClueCompletion.completed_at,
                     )
-                ).all()
-            )
+                    .where(ClueCompletion.game_player_id == membership.id)
+                    .order_by(ClueCompletion.completed_at)
+                )
+            ).all()
+            completions = [
+                {
+                    "clue_id": str(clue_id),
+                    "completed_at": (
+                        completed_at
+                        if completed_at.tzinfo is not None
+                        else completed_at.replace(tzinfo=UTC)
+                    ).isoformat(),
+                }
+                for clue_id, completed_at in completion_rows
+            ]
+            completed_clue_ids = [
+                completion["clue_id"] for completion in completions
+            ]
             progress.append(
                 {
                     "membership_id": str(membership.id),
                     "user": user_json(user),
-                    "completed_count": len(completed_clue_ids),
-                    "completed_clue_ids": [
-                        str(clue_id) for clue_id in completed_clue_ids
-                    ],
+                    "completed_count": len(completions),
+                    "completed_clue_ids": completed_clue_ids,
+                    "completions": completions,
                 }
             )
         return {

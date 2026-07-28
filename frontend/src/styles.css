@@ -623,11 +623,24 @@ textarea:focus-visible, select:focus-visible {
 .membership-list label > span:last-child { display: flex; flex-direction: column; }
 .membership-list small { color: var(--muted); }
 .progress-list { border: 1px solid var(--line); }
-.progress-list > div { display: flex; align-items: center; gap: .8rem; padding: .9rem 1rem; border-bottom: 1px solid var(--line); }
-.progress-list > div > span:nth-child(2) { display: flex; flex-direction: column; min-width: 170px; }
+.progress-player { padding: 1rem; border-bottom: 1px solid var(--line); }
+.progress-player:last-child { border-bottom: 0; }
+.progress-player__summary { display: flex; align-items: center; gap: .8rem; }
+.progress-player__identity { display: flex; flex-direction: column; min-width: 170px; }
 .progress-list small { color: var(--muted); }
 .mini-progress { display: flex; align-items: center; gap: .6rem; flex: 1; }
 .mini-progress > div { flex: 1; }
+.completion-timeline { list-style: none; margin: 1rem 0 0 44px; padding: 0; border-left: 2px solid #d9e6ee; }
+.completion-timeline li { min-height: 52px; display: grid; grid-template-columns: minmax(150px, 1fr) auto; align-items: center; gap: 1rem; position: relative; padding: .55rem .75rem .55rem 1.25rem; background: #f7f9fa; border-bottom: 1px solid #e3e9ed; }
+.completion-timeline li:last-child { border-bottom: 0; }
+.completion-timeline__marker { width: 22px; height: 22px; position: absolute; left: -12px; display: grid; place-items: center; background: var(--lime); color: var(--navy-deep); border: 3px solid white; border-radius: 50%; }
+.completion-timeline__marker svg { width: 12px; height: 12px; stroke-width: 3; }
+.completion-timeline__clue { min-width: 0; display: flex; flex-direction: column; }
+.completion-timeline__clue small { font-size: .6rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; }
+.completion-timeline__clue strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
+.completion-timeline time { display: inline-flex; align-items: center; gap: .35rem; color: var(--navy); font-size: .7rem; font-weight: 700; white-space: nowrap; }
+.completion-timeline time svg { width: 15px; height: 15px; color: var(--blue); }
+.progress-player__empty { margin: .75rem 0 0 44px; color: var(--muted); font-size: .75rem; font-style: italic; }
 .security-panel { max-width: 630px; padding: 1.8rem; }
 .security-panel > p { color: var(--muted); }
 .security-panel form { max-width: 450px; margin-top: 1.5rem; }
@@ -688,8 +701,11 @@ textarea:focus-visible, select:focus-visible {
   .clue-admin-row { grid-template-columns: 68px 1fr; }
   .clue-admin-code { flex-wrap: wrap; }
   .clue-admin-actions { grid-column: 2; }
-  .progress-list > div { align-items: flex-start; flex-wrap: wrap; }
+  .progress-player__summary { align-items: flex-start; flex-wrap: wrap; }
   .mini-progress { flex-basis: 100%; margin-left: 44px; }
+  .completion-timeline { margin-left: 12px; }
+  .completion-timeline li { grid-template-columns: 1fr; gap: .3rem; }
+  .progress-player__empty { margin-left: 44px; }
   .modal-actions { flex-wrap: wrap; }
 }
 
