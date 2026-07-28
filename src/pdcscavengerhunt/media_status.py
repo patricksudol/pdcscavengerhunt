@@ -29,6 +29,16 @@ async def refresh_processing_videos(
             continue
         previous_status = media.status
         media.status = video.status
+        logger.info(
+            "event=stream_status_reconciled request_id=%s stream_uid=%s "
+            "media_id=%s previous_status=%s provider_status=%s size_bytes=%s",
+            request.ctx.request_id,
+            media.provider_key,
+            media.id,
+            previous_status,
+            video.status,
+            media.size_bytes,
+        )
         db.add(
             AuditEvent(
                 action=f"clue.media_{video.status}",

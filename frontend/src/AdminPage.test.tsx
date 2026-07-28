@@ -1,4 +1,5 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AuditTable, ProgressEditor } from "./AdminPage";
@@ -7,6 +8,66 @@ import type { AdminGameDetail, AuditEvent } from "./api";
 afterEach(cleanup);
 
 describe("admin player progress", () => {
+  it("lets an admin advance an incomplete player to a later clue", () => {
+    const game: AdminGameDetail = {
+      id: "game-advance",
+      title: "Advance Hunt",
+      description: null,
+      instructions: null,
+      closing_message: null,
+      status: "open",
+      player_count: 1,
+      clue_count: 3,
+      completion_count: 0,
+      created_at: "2026-07-28T12:00:00+00:00",
+      updated_at: "2026-07-28T12:00:00+00:00",
+      clues: [1, 2, 3].map((position) => ({
+        id: `clue-${position}`,
+        position,
+        title: `Clue ${position}`,
+        content: `Answer ${position}`,
+        code: `CODE-${position}`,
+        code_set: true,
+        photo: null,
+        video: null,
+      })),
+      players: [
+        {
+          membership_id: "membership-advance",
+          user: {
+            id: "player-advance",
+            email_address: "advance@example.com",
+            full_name: "Advance Player",
+            is_admin: false,
+            active: true,
+            password_set: true,
+            created_at: "2026-07-28T12:00:00+00:00",
+            last_login_at: null,
+          },
+          completed_count: 0,
+          completed_clue_ids: [],
+          completion_rank: null,
+          finished_at: null,
+          completions: [],
+        },
+      ],
+    };
+
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProgressEditor game={game} />
+      </QueryClientProvider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /advance/i }));
+
+    expect(screen.getByRole("heading", { name: "Advance Advance Player" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Clue 2: Clue 2" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Clue 3: Clue 3" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Clue 1: Clue 1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /reason/i })).toBeRequired();
+  });
+
   it("shows the completion time for each solved clue", () => {
     const game: AdminGameDetail = {
       id: "game-1",

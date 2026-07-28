@@ -31,6 +31,7 @@ from .schemas import (
     GameCreate,
     GameUpdate,
     MembershipUpdate,
+    ProgressAdvance,
     ProgressReset,
     UserCreate,
     UserUpdate,
@@ -834,6 +835,15 @@ async def upload_clue_media(
         if not await db.get(Clue, clue_id):
             raise NotFound("Clue not found")
 
+    logger.info(
+        "event=media_upload_started request_id=%s clue_id=%s media_type=%s "
+        "size_bytes=%s actor_id=%s",
+        request.ctx.request_id,
+        clue_id,
+        selected_type.value,
+        size_bytes,
+        request.ctx.user.id,
+    )
     provider_key = None
     try:
         if selected_type == MediaType.photo:
@@ -857,6 +867,14 @@ async def upload_clue_media(
             await request.app.ctx.media.secure_video(provider_key)
             status = video.status
     except MediaProviderError as error:
+        logger.exception(
+            "event=media_upload_failed request_id=%s clue_id=%s media_type=%s "
+            "size_bytes=%s",
+            request.ctx.request_id,
+            clue_id,
+            selected_type.value,
+            size_bytes,
+        )
         await delete_provider_media(request, selected_type, provider_key)
         raise SanicException(str(error), status_code=502) from error
 
@@ -917,6 +935,18 @@ async def upload_clue_media(
         raise
     if old_provider_key and old_provider_key != provider_key:
         await delete_provider_media(request, selected_type, old_provider_key)
+    logger.info(
+        "event=media_upload_completed request_id=%s clue_id=%s media_id=%s "
+        "media_type=%s size_bytes=%s provider_status=%s operation=%s actor_id=%s",
+        request.ctx.request_id,
+        clue_id,
+        media.id,
+        selected_type.value,
+        actual_size,
+        status,
+        "attached" if created else "replaced",
+        request.ctx.user.id,
+    )
     return media_json(media), 201 if created else 200
 
 
@@ -954,6 +984,15 @@ async def delete_clue_media(request: Request, clue_id: UUID, media_type: str):
             )
         )
     await delete_provider_media(request, selected_type, provider_key)
+    logger.info(
+        "event=media_removed request_id=%s clue_id=%s media_id=%s "
+        "media_type=%s actor_id=%s",
+        request.ctx.request_id,
+        clue_id,
+        media.id,
+        selected_type.value,
+        request.ctx.user.id,
+    )
     return {"deleted": True}
 
 
@@ -1115,4 +1154,99 @@ async def reset_progress(request: Request, membership_id: UUID):
             "reset": True,
             "completion_count": remaining_count,
             "target_clue_id": str(target_clue.id) if target_clue else None,
+        }
+
+
+@admin_bp.put("/game-players/<membership_id:uuid>/progress")
+@login_required(admin=True)
+async def advance_progress(request: Request, membership_id: UUID):
+    payload = ProgressAdvance.model_validate(request.json or {})
+    async with request.app.ctx.db.session() as db:
+        membership = await db.scalar(
+            select(GamePlayer)
+            .where(GamePlayer.id == membership_id)
+            .with_for_update()
+        )
+        if not membership:
+            raise NotFound("Game assignment not found")
+        clues = list(
+            (
+                await db.scalars(
+                    select(Clue)
+                    .where(Clue.game_id == membership.game_id)
+                    .order_by(Clue.position)
+                )
+            ).all()
+        )
+        target_index = next(
+            (
+                index
+                for index, clue in enumerate(clues)
+                if clue.id == payload.clue_id
+            ),
+            None,
+        )
+        if target_index is None:
+            raise InvalidUsage("That clue does not belong to this game")
+        completed_ids = set(
+            (
+                await db.scalars(
+                    select(ClueCompletion.clue_id).where(
+                        ClueCompletion.game_player_id == membership.id
+                    )
+                )
+            ).all()
+        )
+        first_incomplete = next(
+            (
+                index
+                for index, clue in enumerate(clues)
+                if clue.id not in completed_ids
+            ),
+            len(clues),
+        )
+        if target_index <= first_incomplete:
+            raise InvalidUsage("Choose a clue after the player's current clue")
+
+        now = datetime.now(UTC)
+        added_clues = [
+            clue
+            for clue in clues[:target_index]
+            if clue.id not in completed_ids
+        ]
+        db.add_all(
+            [
+                ClueCompletion(
+                    game_player_id=membership.id,
+                    clue_id=clue.id,
+                    completed_at=now,
+                )
+                for clue in added_clues
+            ]
+        )
+        await db.flush()
+        completion_count = len(completed_ids) + len(added_clues)
+        target_clue = clues[target_index]
+        db.add(
+            audit(
+                request,
+                action="player.progress_advanced",
+                entity_type="game_player",
+                entity_id=str(membership.id),
+                before={"completion_count": len(completed_ids)},
+                after={
+                    "completion_count": completion_count,
+                    "game_id": str(membership.game_id),
+                    "user_id": str(membership.user_id),
+                    "target_clue_id": str(target_clue.id),
+                    "target_position": target_clue.position,
+                    "added_clue_ids": [str(clue.id) for clue in added_clues],
+                },
+                reason=payload.reason.strip(),
+            )
+        )
+        return {
+            "advanced": True,
+            "completion_count": completion_count,
+            "target_clue_id": str(target_clue.id),
         }

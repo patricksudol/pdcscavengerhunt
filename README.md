@@ -136,8 +136,9 @@ Sign in and open `/admin`.
 6. Drag clues by their grip handles to change the order; up/down buttons remain
    available as an accessible fallback.
 7. Copy current codes from the clue list.
-8. Use the Progress tab to monitor players, return a player to a completed clue,
-   or restart their entire game. Every reset requires an audit reason.
+8. Use the Progress tab to monitor players, advance a player to a later clue,
+   return a player to a completed clue, or restart their entire game. Every
+   progress adjustment requires an audit reason.
 
 Invitation links expire after 24 hours, can be used once, and are invalidated
 when a replacement link is generated. No email provider is included; links

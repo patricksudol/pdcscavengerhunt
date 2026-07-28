@@ -492,3 +492,105 @@ async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
         assert event
         assert event.after["completion_count"] == 1
         assert event.after["target_position"] == 2
+
+
+async def test_admin_can_advance_player_progress_to_a_later_clue(app, admin):
+    original_completion_time = datetime(2026, 7, 28, 14, 0, tzinfo=UTC)
+    async with app.ctx.db.session() as db:
+        player = User(
+            email_address="advance-player@example.com",
+            normalized_email_address="advance-player@example.com",
+            full_name="Advance Player",
+        )
+        game = Game(title="Advance Game", status="open")
+        db.add_all([player, game])
+        await db.flush()
+        membership = GamePlayer(game_id=game.id, user_id=player.id)
+        clues = [
+            Clue(
+                game_id=game.id,
+                position=position,
+                title=f"Clue {position}",
+                content=f"Answer {position}",
+                code_fingerprint=fingerprint_code(
+                    f"ADVANCE-{position}",
+                    app.ctx.settings,
+                ),
+            )
+            for position in range(1, 5)
+        ]
+        db.add_all([membership, *clues])
+        await db.flush()
+        db.add(
+            ClueCompletion(
+                game_player_id=membership.id,
+                clue_id=clues[0].id,
+                completed_at=original_completion_time,
+            )
+        )
+        membership_id = membership.id
+
+    cookies, headers = auth(app, admin)
+    _request, current_clue = await app.asgi_client.put(
+        f"/api/v1/admin/game-players/{membership_id}/progress",
+        json={
+            "reason": "Player needs assistance",
+            "clue_id": str(clues[1].id),
+        },
+        cookies=cookies,
+        headers=headers,
+    )
+    assert current_clue.status == 400
+
+    _request, advanced = await app.asgi_client.put(
+        f"/api/v1/admin/game-players/{membership_id}/progress",
+        json={
+            "reason": "Move past an inaccessible location",
+            "clue_id": str(clues[3].id),
+        },
+        cookies=cookies,
+        headers=headers,
+    )
+    assert advanced.status == 200
+    assert advanced.json == {
+        "advanced": True,
+        "completion_count": 3,
+        "target_clue_id": str(clues[3].id),
+    }
+
+    async with app.ctx.db.session() as db:
+        completions = list(
+            (
+                await db.scalars(
+                    select(ClueCompletion)
+                    .where(ClueCompletion.game_player_id == membership_id)
+                    .order_by(ClueCompletion.completed_at)
+                )
+            ).all()
+        )
+        assert {completion.clue_id for completion in completions} == {
+            clue.id for clue in clues[:3]
+        }
+        original = next(
+            completion
+            for completion in completions
+            if completion.clue_id == clues[0].id
+        )
+        stored_original_time = (
+            original.completed_at
+            if original.completed_at.tzinfo is not None
+            else original.completed_at.replace(tzinfo=UTC)
+        )
+        assert stored_original_time == original_completion_time
+        event = await db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "player.progress_advanced",
+                AuditEvent.entity_id == str(membership_id),
+            )
+        )
+        assert event
+        assert event.actor_id == admin.id
+        assert event.reason == "Move past an inaccessible location"
+        assert event.before["completion_count"] == 1
+        assert event.after["completion_count"] == 3
+        assert event.after["target_position"] == 4

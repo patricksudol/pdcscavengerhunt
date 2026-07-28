@@ -88,7 +88,22 @@ async def serve_media(request: Request, media_id: UUID):
             else await request.app.ctx.media.create_video_player_url(media.provider_key)
         )
     except MediaProviderError as error:
+        logger.exception(
+            "event=media_playback_authorization_failed request_id=%s "
+            "media_id=%s media_type=%s",
+            request.ctx.request_id,
+            media.id,
+            media.media_type.value,
+        )
         raise ServiceUnavailable(str(error)) from error
+    logger.info(
+        "event=media_playback_authorized request_id=%s media_id=%s "
+        "media_type=%s user_id=%s",
+        request.ctx.request_id,
+        media.id,
+        media.media_type.value,
+        request.ctx.user.id,
+    )
     return redirect(destination, status=302)
 
 
@@ -96,11 +111,19 @@ async def serve_media(request: Request, media_id: UUID):
 async def stream_webhook(request: Request):
     signature = request.headers.get("webhook-signature", "")
     if not request.app.ctx.media.verify_stream_webhook(request.body, signature):
+        logger.warning(
+            "event=stream_webhook_rejected request_id=%s reason=invalid_signature",
+            request.ctx.request_id,
+        )
         raise Unauthorized("Invalid Stream webhook signature")
     try:
         payload = request.app.ctx.media.parse_webhook(request.body)
         uid = str(payload["uid"])
     except (KeyError, MediaProviderError) as error:
+        logger.warning(
+            "event=stream_webhook_rejected request_id=%s reason=invalid_payload",
+            request.ctx.request_id,
+        )
         raise InvalidUsage("Invalid Stream webhook payload") from error
 
     ready = bool(payload.get("readyToStream"))
@@ -116,6 +139,13 @@ async def stream_webhook(request: Request):
             )
         )
         if not media:
+            logger.warning(
+                "event=stream_webhook_unmatched request_id=%s stream_uid=%s "
+                "provider_status=%s",
+                request.ctx.request_id,
+                uid,
+                status,
+            )
             return {"received": True}
         previous_status = media.status
         if previous_status == "ready" and status == "processing":
@@ -142,6 +172,18 @@ async def stream_webhook(request: Request):
                     request_id=request.ctx.request_id,
                 )
             )
+        logger.info(
+            "event=stream_webhook_processed request_id=%s stream_uid=%s "
+            "media_id=%s previous_status=%s provider_status=%s size_bytes=%s "
+            "status_changed=%s",
+            request.ctx.request_id,
+            uid,
+            media.id,
+            previous_status,
+            status,
+            size_bytes,
+            previous_status != status,
+        )
     if delete_oversized:
         try:
             await request.app.ctx.media.delete_video(uid)

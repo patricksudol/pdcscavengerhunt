@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pdcscavengerhunt.app import create_app
+from pdcscavengerhunt.app import create_app, operational_log_path
 from pdcscavengerhunt.settings import Settings
 
 
@@ -55,3 +55,10 @@ def test_stream_customer_code_is_normalized_to_a_subdomain():
     assert settings.cloudflare_stream_customer_subdomain == (
         "customer-fo4vcqkfd42ymmwp.cloudflarestream.com"
     )
+
+
+def test_operational_logging_redacts_password_setup_tokens():
+    assert operational_log_path(
+        "/api/v1/auth/password-setup/private-invitation-token"
+    ) == "/api/v1/auth/password-setup/<redacted>"
+    assert operational_log_path("/api/v1/player/games") == "/api/v1/player/games"

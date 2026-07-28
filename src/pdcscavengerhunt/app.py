@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from collections import defaultdict, deque
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 from sanic import Request, Sanic
 from sanic.exceptions import SanicException
+from sanic.log import logger
 from sanic.response import file, json
 from sqlalchemy import text
 
@@ -17,6 +19,13 @@ from .db import Database
 from .media import media_bp
 from .player import player_bp
 from .settings import Settings, get_settings
+
+
+def operational_log_path(path: str) -> str:
+    password_setup_prefix = "/api/v1/auth/password-setup/"
+    if path.startswith(password_setup_prefix):
+        return f"{password_setup_prefix}<redacted>"
+    return path
 
 
 def create_app(
@@ -40,6 +49,7 @@ def create_app(
     @app.middleware("request")
     async def request_context(request: Request) -> None:
         request.ctx.request_id = request.headers.get("x-request-id", str(uuid.uuid4()))
+        request.ctx.request_started_at = time.perf_counter()
 
     @app.middleware("response")
     async def normalize_response(request: Request, response):
@@ -79,6 +89,25 @@ def create_app(
                 "img-src 'self' data: https://*.r2.cloudflarestorage.com; "
                 "script-src 'self'; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
+            )
+        if request.path.startswith("/api/") and request.path not in {
+            "/api/health",
+            "/api/ready",
+        }:
+            duration_ms = (
+                time.perf_counter() - request.ctx.request_started_at
+            ) * 1000
+            user = getattr(request.ctx, "user", None)
+            log = logger.warning if response.status >= 400 else logger.info
+            log(
+                "event=http_request request_id=%s method=%s path=%s "
+                "status=%s duration_ms=%.1f user_id=%s",
+                request.ctx.request_id,
+                request.method,
+                operational_log_path(request.path),
+                response.status,
+                duration_ms,
+                getattr(user, "id", "-"),
             )
         return response
 

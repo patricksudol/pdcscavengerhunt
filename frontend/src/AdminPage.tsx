@@ -25,6 +25,7 @@ import {
   ChevronUp,
   Clock3,
   Clipboard,
+  FastForward,
   Gamepad2,
   GripVertical,
   Image as ImageIcon,
@@ -252,6 +253,7 @@ const auditActionLabels: Record<string, string> = {
   "clue.media_removed": "Removed clue media",
   "clue.media_ready": "Finished processing clue media",
   "clue.media_error": "Failed to process clue media",
+  "player.progress_advanced": "Advanced player progress",
   "player.progress_reset": "Reset player progress",
 };
 
@@ -744,6 +746,7 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
 
 export function ProgressEditor({ game }: { game: AdminGameDetail }) {
   const [resetting, setResetting] = useState<AdminGameDetail["players"][number] | null>(null);
+  const [advancing, setAdvancing] = useState<AdminGameDetail["players"][number] | null>(null);
   const cluesById = new Map(game.clues.map((clue) => [clue.id, clue]));
   return (
     <div className="drawer-section">
@@ -765,6 +768,7 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
                 </span>
               )}
               <div className="mini-progress"><div><span style={{ width: `${game.clue_count ? (entry.completed_count / game.clue_count) * 100 : 0}%` }} /></div><small>{entry.completed_count} / {game.clue_count}</small></div>
+              {entry.completed_count < game.clue_count - 1 && <Button variant="quiet" onClick={() => setAdvancing(entry)}><FastForward /> Advance…</Button>}
               {entry.completed_count > 0 && <Button variant="quiet" onClick={() => setResetting(entry)}>Reset…</Button>}
             </div>
             {entry.completions.length > 0 ? (
@@ -796,7 +800,77 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
           onClose={() => setResetting(null)}
         />
       )}
+      {advancing && (
+        <ProgressAdvanceEditor
+          game={game}
+          entry={advancing}
+          onClose={() => setAdvancing(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function ProgressAdvanceEditor({
+  game,
+  entry,
+  onClose,
+}: {
+  game: AdminGameDetail;
+  entry: AdminGameDetail["players"][number];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const firstIncompleteIndex = game.clues.findIndex(
+    (clue) => !entry.completed_clue_ids.includes(clue.id),
+  );
+  const targets = game.clues.slice(firstIncompleteIndex + 1);
+  const [target, setTarget] = useState(targets[0]?.id ?? "");
+  const [reason, setReason] = useState("");
+  const advance = useMutation({
+    mutationFn: () =>
+      postJson(
+        `/api/v1/admin/game-players/${entry.membership_id}/progress`,
+        { reason, clue_id: target },
+        "PUT",
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-game", game.id] });
+      onClose();
+    },
+  });
+  return (
+    <Modal title={`Advance ${entry.user.full_name}`} onClose={onClose}>
+      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); advance.mutate(); }}>
+        <label className="field">
+          <span>Advance to</span>
+          <select value={target} onChange={(event) => setTarget(event.target.value)}>
+            {targets.map((clue) => (
+              <option value={clue.id} key={clue.id}>
+                Clue {clue.position}: {clue.title}
+              </option>
+            ))}
+          </select>
+          <small>All earlier clues will be marked complete at the current time.</small>
+        </label>
+        <TextArea
+          label="Reason"
+          name="advance-reason"
+          rows={3}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          required
+          minLength={3}
+          maxLength={500}
+          hint="Required for the audit log."
+        />
+        <ErrorMessage error={advance.error} />
+        <div className="modal-actions">
+          <Button variant="quiet" type="button" onClick={onClose}>Cancel</Button>
+          <Button busy={advance.isPending} type="submit"><FastForward /> Advance player</Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
