@@ -10,6 +10,7 @@ import {
   LockKeyhole,
   LogOut,
   Map,
+  MapPin,
   PartyPopper,
   ShieldCheck,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import {
 import {
   api,
   Me,
+  PlayerClue,
   PlayerGame,
   PlayerGameDetail,
   postJson,
@@ -25,6 +27,53 @@ import {
 import { Brand, Button, EmptyState, ErrorMessage, StatusBadge } from "./components";
 
 const confettiColors = ["#8cd624", "#2395d3", "#f6be00", "#6738a7", "#ef476f", "#ffffff"];
+
+export function CurrentClueCard({
+  current,
+  clueCount,
+  code,
+  busy,
+  error,
+  onCodeChange,
+  onSubmit,
+}: {
+  current: PlayerClue;
+  clueCount: number;
+  code: string;
+  busy: boolean;
+  error: unknown;
+  onCodeChange: (value: string) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const headingId = `current-clue-${current.position}`;
+  return (
+    <section className="unlock-card" aria-labelledby={headingId}>
+      <header className="unlock-card__head">
+        <span><MapPin aria-hidden="true" /> Current clue</span>
+        <small>Clue {current.position} of {clueCount}</small>
+      </header>
+      <div className="unlock-card__body">
+        <span className="unlock-card__icon" aria-hidden="true"><KeyRound /></span>
+        <div className="eyebrow">Your next challenge</div>
+        <h2 className="unlock-card__clue" id={headingId}>{current.clue}</h2>
+        <p>Solve this clue, then enter the code you find to reveal the answer.</p>
+        <form onSubmit={onSubmit}>
+          <input
+            aria-label={`Code for clue ${current.position}`}
+            autoCapitalize="characters"
+            autoComplete="off"
+            placeholder="ENTER CODE"
+            value={code}
+            onChange={(event) => onCodeChange(event.target.value)}
+            required
+          />
+          <Button busy={busy} type="submit">Reveal answer</Button>
+        </form>
+        <ErrorMessage error={error} />
+      </div>
+    </section>
+  );
+}
 
 function ClueConfetti({ grandFinale = false }: { grandFinale?: boolean }) {
   const pieceCount = grandFinale ? 160 : 72;
@@ -182,7 +231,7 @@ function GameView({ me, gameId }: { me: Me; gameId: string }) {
     return () => window.cancelAnimationFrame(frame);
   }, [freshRevealId, latestCompleted?.id]);
 
-  function submit(event: FormEvent) {
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     complete.mutate();
   }
@@ -247,28 +296,15 @@ function GameView({ me, gameId }: { me: Me; gameId: string }) {
                 </p>
               </section>
             ) : current && game.data.status === "open" ? (
-              <section className="unlock-card">
-                <div className="unlock-card__number">Clue {current.position}</div>
-                <KeyRound />
-                <div className="eyebrow">Clue</div>
-                <h2 className="unlock-card__clue">{current.clue}</h2>
-                <p>
-                  Enter this clue’s code to reveal the answer.
-                </p>
-                <form onSubmit={submit}>
-                  <input
-                    aria-label={`Code for clue ${current.position}`}
-                    autoCapitalize="characters"
-                    autoComplete="off"
-                    placeholder="ENTER CODE"
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                    required
-                  />
-                  <Button busy={complete.isPending} type="submit">Reveal answer</Button>
-                </form>
-                <ErrorMessage error={complete.error} />
-              </section>
+              <CurrentClueCard
+                current={current}
+                clueCount={game.data.clue_count}
+                code={code}
+                busy={complete.isPending}
+                error={complete.error}
+                onCodeChange={setCode}
+                onSubmit={submit}
+              />
             ) : game.data.status === "open" && game.data.clue_count === 0 ? (
               <section className="closed-notice">
                 <Flag />
