@@ -387,3 +387,43 @@ async def test_processing_video_is_not_exposed_to_player(app, admin):
     async with app.ctx.db.session() as db:
         actions = set((await db.scalars(select(AuditEvent.action))).all())
         assert "clue.media_ready" in actions
+
+
+async def test_missed_webhook_is_reconciled_when_game_is_reloaded(app, admin):
+    provider = FakeMediaProvider()
+    app.ctx.media = provider
+    player, _stranger, game, _membership, clues = await make_media_game(app)
+    _request, uploaded = await upload_media(
+        app,
+        admin,
+        provider,
+        clues[0],
+        "video",
+        VIDEO_BYTES,
+        "video/quicktime",
+        "reconcile.mov",
+        video_status="processing",
+    )
+    assert uploaded.json["status"] == "processing"
+    assert provider.last_video_uid
+    provider.videos[provider.last_video_uid] = StreamVideo(
+        len(VIDEO_BYTES),
+        "ready",
+        True,
+    )
+
+    player_cookies, _headers = auth(app, player)
+    _request, refreshed = await app.asgi_client.get(
+        f"/api/v1/player/games/{game.id}",
+        cookies=player_cookies,
+    )
+    assert refreshed.status == 200
+    assert refreshed.json["clues"][0]["video"]["status"] == "ready"
+
+    async with app.ctx.db.session() as db:
+        media = await db.get(ClueMedia, UUID(uploaded.json["id"]))
+        assert media.status == "ready"
+        event = await db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "clue.media_ready")
+        )
+        assert event.reason == "Reconciled with Cloudflare Stream"

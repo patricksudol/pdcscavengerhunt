@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, select, update
 
 from .auth import setup_token_hash
 from .cloudflare_media import MediaProviderError
+from .media_status import refresh_processing_videos
 from .models import (
     AuditEvent,
     Clue,
@@ -534,6 +535,7 @@ async def get_game(request: Request, game_id: UUID):
                 )
             ).all()
         )
+        await refresh_processing_videos(request, db, clue_media)
         media_by_clue: dict[UUID, list[ClueMedia]] = {}
         for media in clue_media:
             media_by_clue.setdefault(media.clue_id, []).append(media)

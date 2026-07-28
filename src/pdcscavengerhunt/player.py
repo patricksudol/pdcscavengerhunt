@@ -7,6 +7,7 @@ from sanic import Blueprint, Request
 from sanic.exceptions import Forbidden, InvalidUsage, NotFound, SanicException
 from sqlalchemy import func, select
 
+from .media_status import refresh_processing_videos
 from .models import (
     AuditEvent,
     Clue,
@@ -38,7 +39,12 @@ async def membership_for(db, game_id: UUID, user_id: UUID, *, lock: bool = False
     return await db.scalar(query)
 
 
-async def game_state(db, game: Game, membership: GamePlayer) -> dict:
+async def game_state(
+    request: Request,
+    db,
+    game: Game,
+    membership: GamePlayer,
+) -> dict:
     clues = list(
         (
             await db.scalars(
@@ -65,6 +71,7 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
             )
         ).all()
     )
+    await refresh_processing_videos(request, db, media_items)
     media_by_clue: dict[UUID, dict[MediaType, ClueMedia]] = {}
     for media in media_items:
         media_by_clue.setdefault(media.clue_id, {})[media.media_type] = media
@@ -176,7 +183,7 @@ async def get_game(request: Request, game_id: UUID):
         membership = await membership_for(db, game_id, request.ctx.user.id)
         if not game or not membership or game.status == GameStatus.draft:
             raise NotFound("Game not found")
-        return await game_state(db, game, membership)
+        return await game_state(request, db, game, membership)
 
 
 @player_bp.post("/games/<game_id:uuid>/clues/<clue_id:uuid>/complete")
@@ -224,7 +231,7 @@ async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
         if target.id in completed_ids:
             return {
                 "created": False,
-                "game": await game_state(db, game, membership),
+                "game": await game_state(request, db, game, membership),
             }
         next_clue = next((clue for clue in clues if clue.id not in completed_ids), None)
         if not next_clue or next_clue.id != target.id:
@@ -261,7 +268,7 @@ async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
             )
             result = {
                 "created": True,
-                "game": await game_state(db, game, membership),
+                "game": await game_state(request, db, game, membership),
             }
     if incorrect_code:
         raise InvalidUsage("That code is not correct")
