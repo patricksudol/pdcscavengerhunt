@@ -103,7 +103,17 @@ async def login(request: Request):
 
 @auth_bp.post("/logout")
 @login_required()
-async def logout(_request: Request):
+async def logout(request: Request):
+    async with request.app.ctx.db.session() as db:
+        db.add(
+            AuditEvent(
+                actor_id=request.ctx.user.id,
+                action="auth.logout",
+                entity_type="user",
+                entity_id=str(request.ctx.user.id),
+                request_id=request.ctx.request_id,
+            )
+        )
     response = json({"signed_out": True})
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response

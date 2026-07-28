@@ -47,6 +47,8 @@ import {
   AdminGame,
   AdminGameDetail,
   AdminUser,
+  AuditEvent,
+  AuditEventPage,
   api,
   formatDate,
   Me,
@@ -167,11 +169,17 @@ function Players() {
   const update = useMutation({
     mutationFn: ({ id, changes }: { id: string; changes: Partial<AdminUser> }) =>
       postJson<AdminUser>(`/api/v1/admin/users/${id}`, changes, "PATCH"),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-users"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-events"] });
+    },
   });
   const invite = useMutation({
     mutationFn: (id: string) => postJson<{ setup_url: string }>(`/api/v1/admin/users/${id}/setup-link`, {}),
-    onSuccess: (result) => setSetupUrl(result.setup_url),
+    onSuccess: (result) => {
+      setSetupUrl(result.setup_url);
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-events"] });
+    },
   });
   return (
     <>
@@ -207,10 +215,146 @@ function Players() {
           </div>
         }
       </section>
-      {creating && <CreatePlayer onClose={() => setCreating(false)} onCreated={(url) => { setCreating(false); setSetupUrl(url); queryClient.invalidateQueries({ queryKey: ["admin-users"] }); }} />}
-      {editing && <EditPlayer user={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); queryClient.invalidateQueries({ queryKey: ["admin-users"] }); }} />}
+      <AuditLog />
+      {creating && <CreatePlayer onClose={() => setCreating(false)} onCreated={(url) => { setCreating(false); setSetupUrl(url); queryClient.invalidateQueries({ queryKey: ["admin-users"] }); queryClient.invalidateQueries({ queryKey: ["admin-audit-events"] }); }} />}
+      {editing && <EditPlayer user={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); queryClient.invalidateQueries({ queryKey: ["admin-users"] }); queryClient.invalidateQueries({ queryKey: ["admin-audit-events"] }); }} />}
       {setupUrl && <InviteModal url={setupUrl} onClose={() => setSetupUrl(null)} />}
     </>
+  );
+}
+
+const auditActionLabels: Record<string, string> = {
+  "auth.login_succeeded": "Signed in",
+  "auth.login_failed": "Sign-in rejected",
+  "auth.logout": "Signed out",
+  "auth.password_set": "Set password",
+  "auth.password_changed": "Changed password",
+  "clue.code_rejected": "Tried an incorrect clue code",
+  "clue.completed": "Completed a clue",
+  "user.created": "Created a player",
+  "user.seeded": "Created the initial administrator",
+  "user.updated": "Updated a player",
+  "user.setup_link_generated": "Issued a password invitation",
+  "game.created": "Created a game",
+  "game.updated": "Updated a game",
+  "game.players_updated": "Changed game assignments",
+  "clue.created": "Created a clue",
+  "clue.updated": "Updated a clue",
+  "clues.reordered": "Reordered clues",
+  "clue.deleted": "Deleted a clue",
+  "player.progress_reset": "Reset player progress",
+};
+
+function humanize(value: string) {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function changedFields(event: AuditEvent) {
+  if (!event.before || !event.after) return [];
+  return Object.keys(event.after).filter(
+    (key) => JSON.stringify(event.before?.[key]) !== JSON.stringify(event.after?.[key]),
+  );
+}
+
+function auditSummary(event: AuditEvent) {
+  if (event.reason) return event.reason;
+  const after = event.after;
+  if (event.action === "clue.completed" && typeof after?.position === "number") {
+    return `Clue ${after.position}`;
+  }
+  if (event.action === "user.created" && typeof after?.email_address === "string") {
+    return after.email_address;
+  }
+  if ((event.action === "game.created" || event.action === "game.updated") && typeof after?.title === "string") {
+    const fields = changedFields(event);
+    return fields.length ? `${after.title} · Changed ${fields.map(humanize).join(", ")}` : after.title;
+  }
+  if (event.action === "user.updated") {
+    const fields = changedFields(event);
+    return fields.length ? `Changed ${fields.map(humanize).join(", ")}` : "Player record saved";
+  }
+  if (event.action === "game.players_updated" && Array.isArray(after?.user_ids)) {
+    return `${after.user_ids.length} player${after.user_ids.length === 1 ? "" : "s"} assigned`;
+  }
+  if (event.action === "clue.created" && typeof after?.position === "number") {
+    return `Clue ${after.position}`;
+  }
+  if (event.action === "clue.updated") {
+    const fields = changedFields(event);
+    return fields.length ? `Changed ${fields.map(humanize).join(", ")}` : "Clue saved";
+  }
+  if (event.action === "clues.reordered" && Array.isArray(after?.clue_ids)) {
+    return `${after.clue_ids.length} clues`;
+  }
+  if (event.action === "clue.deleted" && typeof event.before?.position === "number") {
+    return `Clue ${event.before.position}`;
+  }
+  return humanize(event.entity_type);
+}
+
+export function AuditTable({ events }: { events: AuditEvent[] }) {
+  return (
+    <div className="table audit-table-wrap">
+      <div className="audit-table audit-table--head"><span>When</span><span>Player or admin</span><span>Activity</span><span>Details</span></div>
+      {events.map((event) => (
+        <div className="audit-table" key={event.id}>
+          <time dateTime={event.created_at}>{formatDate(event.created_at)}</time>
+          <span className="audit-actor">
+            <strong>{event.actor?.full_name ?? (event.action === "auth.login_failed" ? "Unknown account" : "System")}</strong>
+            <small>
+              {event.actor?.is_admin ? "Administrator" : event.actor?.email_address ?? "Not authenticated"}
+              {event.subject && event.subject.id !== event.actor?.id ? ` · For ${event.subject.full_name}` : ""}
+            </small>
+          </span>
+          <span><strong>{auditActionLabels[event.action] ?? humanize(event.action.replaceAll(".", " "))}</strong></span>
+          <span className="audit-summary">
+            <span>{auditSummary(event)}</span>
+            <details>
+              <summary>Record details</summary>
+              <dl>
+                <div><dt>Entity</dt><dd>{humanize(event.entity_type)} · {event.entity_id}</dd></div>
+                {event.request_id && <div><dt>Request</dt><dd>{event.request_id}</dd></div>}
+                {event.before && <div><dt>Before</dt><dd><pre>{JSON.stringify(event.before, null, 2)}</pre></dd></div>}
+                {event.after && <div><dt>After</dt><dd><pre>{JSON.stringify(event.after, null, 2)}</pre></dd></div>}
+              </dl>
+            </details>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AuditLog() {
+  const pageSize = 50;
+  const [offset, setOffset] = useState(0);
+  const events = useQuery({
+    queryKey: ["admin-audit-events", offset],
+    queryFn: () => api<AuditEventPage>(`/api/v1/admin/audit-events?limit=${pageSize}&offset=${offset}`),
+  });
+  const page = Math.floor(offset / pageSize) + 1;
+  const pageCount = Math.max(1, Math.ceil((events.data?.total ?? 0) / pageSize));
+  return (
+    <section className="panel audit-panel">
+      <header className="audit-panel__head">
+        <div><div className="eyebrow">Accountability</div><h2>Player audit trail</h2><p>Logins, password activity, clue attempts, and administrative changes.</p></div>
+        {events.data && <span>{events.data.total} event{events.data.total === 1 ? "" : "s"}</span>}
+      </header>
+      {events.isLoading ? <div className="panel-loading">Loading audit trail…</div> :
+        events.isError ? <ErrorMessage error={events.error} /> :
+        !events.data?.items.length ? <EmptyState icon={<Shield />} title="No audit events">Activity will appear here as players and administrators use the hunt.</EmptyState> :
+        <>
+          <AuditTable events={events.data.items} />
+          {pageCount > 1 && (
+            <footer className="audit-pagination">
+              <Button variant="quiet" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - pageSize))}>Previous</Button>
+              <span>Page {page} of {pageCount}</span>
+              <Button variant="quiet" disabled={offset + pageSize >= events.data.total} onClick={() => setOffset(offset + pageSize)}>Next</Button>
+            </footer>
+          )}
+        </>
+      }
+    </section>
   );
 }
 

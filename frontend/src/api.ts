@@ -45,6 +45,34 @@ export interface AdminUser {
   game_count?: number;
 }
 
+export interface AuditActor {
+  id: string;
+  email_address: string;
+  full_name: string;
+  is_admin: boolean;
+}
+
+export interface AuditEvent {
+  id: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  reason: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  request_id: string | null;
+  created_at: string;
+  actor: AuditActor | null;
+  subject: AuditActor | null;
+}
+
+export interface AuditEventPage {
+  items: AuditEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface AdminGame {
   id: string;
   title: string;

@@ -77,6 +77,31 @@ def user_json(user: User, *, game_count: int | None = None) -> dict:
     return result
 
 
+def audit_user_json(user: User | None) -> dict | None:
+    if not user:
+        return None
+    return {
+        "id": str(user.id),
+        "email_address": user.email_address,
+        "full_name": user.full_name,
+        "is_admin": user.is_admin,
+    }
+
+
+def audit_subject_id(event: AuditEvent) -> UUID | None:
+    candidate = (
+        event.entity_id
+        if event.entity_type == "user"
+        else event.after.get("user_id")
+        if event.after
+        else None
+    )
+    try:
+        return UUID(candidate) if isinstance(candidate, str) else None
+    except ValueError:
+        return None
+
+
 def game_json(
     game: Game,
     *,
@@ -152,6 +177,68 @@ async def list_users(request: Request):
             )
         ).all()
         return [user_json(user, game_count=count) for user, count in rows]
+
+
+@admin_bp.get("/audit-events")
+@login_required(admin=True)
+async def list_audit_events(request: Request):
+    try:
+        limit = int(request.args.get("limit", "50"))
+        offset = int(request.args.get("offset", "0"))
+    except ValueError as error:
+        raise InvalidUsage("Audit pagination values must be integers") from error
+    if not 1 <= limit <= 100:
+        raise InvalidUsage("Audit limit must be between 1 and 100")
+    if offset < 0:
+        raise InvalidUsage("Audit offset cannot be negative")
+
+    async with request.app.ctx.db.session() as db:
+        total = await db.scalar(select(func.count(AuditEvent.id))) or 0
+        rows = (
+            await db.execute(
+                select(AuditEvent, User)
+                .outerjoin(User, User.id == AuditEvent.actor_id)
+                .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()
+        subject_ids = {
+            subject_id
+            for event, _actor in rows
+            if (subject_id := audit_subject_id(event))
+        }
+        subjects = (
+            {
+                user.id: user
+                for user in (
+                    await db.scalars(select(User).where(User.id.in_(subject_ids)))
+                ).all()
+            }
+            if subject_ids
+            else {}
+        )
+        return {
+            "items": [
+                {
+                    "id": str(event.id),
+                    "action": event.action,
+                    "entity_type": event.entity_type,
+                    "entity_id": event.entity_id,
+                    "reason": event.reason,
+                    "before": event.before,
+                    "after": event.after,
+                    "request_id": event.request_id,
+                    "created_at": event.created_at.isoformat(),
+                    "actor": audit_user_json(actor),
+                    "subject": audit_user_json(subjects.get(audit_subject_id(event))),
+                }
+                for event, actor in rows
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
 
 @admin_bp.post("/users")
@@ -737,6 +824,8 @@ async def reset_progress(request: Request, membership_id: UUID):
                 before={"completion_count": completion_count or 0},
                 after={
                     "completion_count": remaining_count,
+                    "game_id": str(membership.game_id),
+                    "user_id": str(membership.user_id),
                     "target_clue_id": str(target_clue.id) if target_clue else None,
                     "target_position": target_clue.position if target_clue else None,
                 },

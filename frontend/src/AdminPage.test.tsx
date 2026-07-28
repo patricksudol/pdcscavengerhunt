@@ -1,8 +1,8 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ProgressEditor } from "./AdminPage";
-import type { AdminGameDetail } from "./api";
+import { AuditTable, ProgressEditor } from "./AdminPage";
+import type { AdminGameDetail, AuditEvent } from "./api";
 
 afterEach(cleanup);
 
@@ -132,5 +132,65 @@ describe("admin player progress", () => {
     expect(screen.getByLabelText("2nd place")).toHaveClass("finish-rank--silver");
     expect(screen.getByLabelText("3rd place")).toHaveClass("finish-rank--bronze");
     expect(screen.getByLabelText("4th place")).toHaveClass("finish-rank--numbered");
+  });
+});
+
+describe("admin audit trail", () => {
+  it("shows the actor, activity, timestamp, and audit details", () => {
+    const events: AuditEvent[] = [
+      {
+        id: "event-1",
+        action: "clue.completed",
+        entity_type: "clue",
+        entity_id: "clue-1",
+        reason: null,
+        before: null,
+        after: { game_id: "game-1", position: 2 },
+        request_id: "request-1",
+        created_at: "2026-07-28T14:35:00+00:00",
+        actor: {
+          id: "player-1",
+          email_address: "player@example.com",
+          full_name: "Player One",
+          is_admin: false,
+        },
+        subject: null,
+      },
+    ];
+
+    render(<AuditTable events={events} />);
+
+    expect(screen.getByText("Player One")).toBeInTheDocument();
+    expect(screen.getByText("Completed a clue")).toBeInTheDocument();
+    expect(screen.getByText("Clue 2")).toBeInTheDocument();
+    expect(screen.getByText("Jul 28, 2026, 10:35 AM")).toHaveAttribute(
+      "datetime",
+      events[0].created_at,
+    );
+    expect(screen.getByText("Record details")).toBeInTheDocument();
+  });
+
+  it("identifies unauthenticated failed logins without exposing an email", () => {
+    const events: AuditEvent[] = [
+      {
+        id: "event-2",
+        action: "auth.login_failed",
+        entity_type: "login",
+        entity_id: "hashed-identity",
+        reason: "Invalid credentials",
+        before: null,
+        after: null,
+        request_id: null,
+        created_at: "2026-07-28T15:00:00+00:00",
+        actor: null,
+        subject: null,
+      },
+    ];
+
+    render(<AuditTable events={events} />);
+
+    expect(screen.getByText("Unknown account")).toBeInTheDocument();
+    expect(screen.getByText("Sign-in rejected")).toBeInTheDocument();
+    expect(screen.getByText("Invalid credentials")).toBeInTheDocument();
   });
 });

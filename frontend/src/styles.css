@@ -557,6 +557,27 @@ textarea:focus-visible, select:focus-visible {
 .switch-label input, .check-field input, .membership-list input { width: 18px; height: 18px; accent-color: var(--navy); }
 .row-actions { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
 .row-actions .button { min-height: 36px; padding: .45rem .6rem; font-size: .65rem; }
+.audit-panel { margin-top: 2rem; }
+.audit-panel__head { padding: 1.3rem; display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--line); }
+.audit-panel__head h2 { margin: .25rem 0; }
+.audit-panel__head p { margin: 0; color: var(--muted); font-size: .82rem; }
+.audit-panel__head > span { color: var(--muted); font-size: .72rem; white-space: nowrap; }
+.audit-table { display: grid; grid-template-columns: minmax(150px, .65fr) minmax(180px, .8fr) minmax(190px, .85fr) minmax(220px, 1.2fr); gap: 1rem; align-items: start; padding: 1rem 1.3rem; border-bottom: 1px solid var(--line); font-size: .78rem; }
+.audit-table--head { background: #f9fbfc; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: .63rem; font-weight: 800; }
+.audit-table time { color: var(--muted); white-space: nowrap; }
+.audit-actor { display: flex; flex-direction: column; min-width: 0; }
+.audit-actor strong, .audit-actor small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audit-actor small { color: var(--muted); margin-top: .2rem; }
+.audit-summary > span { color: var(--muted); }
+.audit-summary details { margin-top: .45rem; }
+.audit-summary summary { width: fit-content; color: var(--blue); cursor: pointer; font-size: .7rem; font-weight: 800; }
+.audit-summary dl { margin: .7rem 0 0; padding: .7rem; background: #f4f7f8; }
+.audit-summary dl > div + div { margin-top: .6rem; }
+.audit-summary dt { color: var(--muted); font-size: .6rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.audit-summary dd { margin: .15rem 0 0; overflow-wrap: anywhere; }
+.audit-summary pre { max-height: 240px; margin: 0; overflow: auto; font-size: .65rem; white-space: pre-wrap; }
+.audit-pagination { padding: .8rem 1.3rem; display: flex; align-items: center; justify-content: flex-end; gap: 1rem; color: var(--muted); font-size: .72rem; }
+.audit-pagination .button { min-height: 34px; padding: .4rem .65rem; }
 .admin-game-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2rem; }
 .admin-game-card { border: 1px solid var(--line); border-top: 6px solid var(--blue); background: white; color: inherit; padding: 1.4rem; text-align: left; min-height: 260px; display: flex; flex-direction: column; }
 .admin-game-card:hover { box-shadow: 7px 7px 0 rgba(140, 214, 36, .55); }
@@ -709,6 +730,9 @@ textarea:focus-visible, select:focus-visible {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
   .user-table { grid-template-columns: 1fr .4fr .6fr 1fr; }
   .user-table > span:nth-child(4), .user-table--head > span:nth-child(4) { display: none; }
+  .audit-table { grid-template-columns: minmax(145px, .7fr) minmax(165px, .8fr) minmax(180px, 1fr); }
+  .audit-table > span:nth-child(4) { grid-column: 3; }
+  .audit-table--head > span:nth-child(4) { display: none; }
 }
 
 @media (max-width: 850px) {
@@ -728,6 +752,10 @@ textarea:focus-visible, select:focus-visible {
   .user-table { grid-template-columns: 1fr; gap: .55rem; }
   .user-table > span:nth-child(2)::before { content: "Games: "; color: var(--muted); }
   .user-table > span:nth-child(4) { display: block; }
+  .audit-table--head { display: none; }
+  .audit-table { grid-template-columns: minmax(130px, .55fr) 1fr; }
+  .audit-table > span:nth-child(3) { grid-column: 2; grid-row: 2; }
+  .audit-table > span:nth-child(4) { grid-column: 2; }
 }
 
 @media (max-width: 650px) {
@@ -748,6 +776,10 @@ textarea:focus-visible, select:focus-visible {
   .unlock-card form { flex-direction: column; gap: .6rem; }
   .clue-row { grid-template-columns: 42px 1fr; padding: 1rem; }
   .title-action, .welcome-panel, .drawer-section__title { align-items: flex-start; flex-direction: column; }
+  .audit-panel__head { flex-direction: column; }
+  .audit-table { grid-template-columns: 1fr; gap: .45rem; }
+  .audit-table time, .audit-table > span:nth-child(2), .audit-table > span:nth-child(3), .audit-table > span:nth-child(4) { grid-column: 1; grid-row: auto; }
+  .audit-pagination { justify-content: space-between; }
   .admin-content { padding: 1.4rem 1rem; }
   .admin-topbar > div { display: none; }
   .admin-topbar__user { display: none; }

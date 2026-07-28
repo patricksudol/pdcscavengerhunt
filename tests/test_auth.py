@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from pdcscavengerhunt.models import PasswordSetupToken, User
+from pdcscavengerhunt.models import AuditEvent, PasswordSetupToken, User
 from pdcscavengerhunt.security import verify_password
 
 from .conftest import auth
@@ -77,6 +77,27 @@ async def test_player_can_login_and_admin_api_is_forbidden(app, admin):
         cookies={"pdc_hunt_session": login.cookies["pdc_hunt_session"]},
     )
     assert forbidden.status == 403
+
+
+async def test_logout_is_audited(app, admin):
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.post(
+        "/api/v1/auth/logout",
+        cookies=cookies,
+        headers=headers,
+    )
+
+    assert response.status == 200
+    assert response.json == {"signed_out": True}
+    async with app.ctx.db.session() as db:
+        event = await db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "auth.logout")
+        )
+        assert event
+        assert event.actor_id == admin.id
+        assert event.entity_type == "user"
+        assert event.entity_id == str(admin.id)
+        assert event.request_id
 
 
 async def test_mutations_require_csrf(app, admin):

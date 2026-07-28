@@ -295,6 +295,83 @@ async def test_admin_can_edit_full_name_and_email_address(app, admin):
         assert stored.normalized_email_address == "after.name@example.com"
 
 
+async def test_admin_can_page_through_audit_events(app, admin):
+    earlier = datetime(2026, 7, 28, 14, 0, tzinfo=UTC)
+    later = earlier + timedelta(minutes=5)
+    async with app.ctx.db.session() as db:
+        db.add_all(
+            [
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="auth.password_changed",
+                    entity_type="user",
+                    entity_id=str(admin.id),
+                    request_id="request-earlier",
+                    created_at=earlier,
+                ),
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="auth.login_succeeded",
+                    entity_type="user",
+                    entity_id=str(admin.id),
+                    request_id="request-later",
+                    created_at=later,
+                ),
+            ]
+        )
+
+    cookies, headers = auth(app, admin)
+    _request, first_page = await app.asgi_client.get(
+        "/api/v1/admin/audit-events?limit=1",
+        cookies=cookies,
+        headers=headers,
+    )
+    assert first_page.status == 200
+    assert first_page.json["total"] == 2
+    assert first_page.json["limit"] == 1
+    assert first_page.json["offset"] == 0
+    assert first_page.json["items"][0]["action"] == "auth.login_succeeded"
+    assert first_page.json["items"][0]["actor"] == {
+        "id": str(admin.id),
+        "email_address": admin.email_address,
+        "full_name": admin.full_name,
+        "is_admin": True,
+    }
+    assert first_page.json["items"][0]["subject"] == {
+        "id": str(admin.id),
+        "email_address": admin.email_address,
+        "full_name": admin.full_name,
+        "is_admin": True,
+    }
+
+    _request, second_page = await app.asgi_client.get(
+        "/api/v1/admin/audit-events?limit=1&offset=1",
+        cookies=cookies,
+        headers=headers,
+    )
+    assert second_page.status == 200
+    assert second_page.json["items"][0]["action"] == "auth.password_changed"
+
+
+async def test_non_admin_cannot_read_audit_events(app, admin):
+    async with app.ctx.db.session() as db:
+        player = User(
+            email_address="audit-player@example.com",
+            normalized_email_address="audit-player@example.com",
+            full_name="Audit Player",
+        )
+        db.add(player)
+        await db.flush()
+
+    cookies, headers = auth(app, player)
+    _request, response = await app.asgi_client.get(
+        "/api/v1/admin/audit-events",
+        cookies=cookies,
+        headers=headers,
+    )
+    assert response.status == 403
+
+
 async def test_admin_can_reset_player_progress_with_reason(app, admin):
     async with app.ctx.db.session() as db:
         player = User(
