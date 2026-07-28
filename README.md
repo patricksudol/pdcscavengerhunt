@@ -152,11 +152,11 @@ preview, and remove attachments from the clue editor.
 - Photos: JPEG, PNG, or WebP, up to 8 MiB
 - Videos: MP4 or MOV, up to 100 MiB
 
-Photos are uploaded through the Render web service into a private Cloudflare R2
-bucket. The 8 MiB limit keeps this request small and avoids mobile browser
-cross-origin upload failures. Videos upload directly to Cloudflare Stream, which
-encodes them and supplies an adaptive browser player. Render never stores media
-on its filesystem.
+Photos and videos are uploaded through the Render web service to avoid mobile
+browser cross-origin upload failures. Render sends photos to a private
+Cloudflare R2 bucket and videos to Cloudflare Stream, which encodes them and
+supplies an adaptive browser player. Render relays each upload in memory and
+never stores media on its filesystem.
 
 The application keeps media metadata and clue access rules in PostgreSQL. When a
 player reaches a clue, the application redirects the photo to a short-lived

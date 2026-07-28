@@ -25,6 +25,9 @@ def create_app(
     settings = settings or get_settings()
     app = Sanic(name)
     app.config.FALLBACK_ERROR_FORMAT = "json"
+    app.config.REQUEST_MAX_SIZE = (
+        max(settings.photo_max_bytes, settings.video_max_bytes) + 1024 * 1024
+    )
     app.ctx.settings = settings
     app.ctx.db = Database(settings.database_url)
     app.ctx.media = CloudflareMediaProvider(settings)

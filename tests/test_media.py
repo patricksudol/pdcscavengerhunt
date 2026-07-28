@@ -30,6 +30,7 @@ class FakeMediaProvider:
     deleted_photos: list[str] = field(default_factory=list)
     deleted_videos: list[str] = field(default_factory=list)
     last_video_uid: str | None = None
+    next_video_status: str = "ready"
     webhook_payload: dict = field(default_factory=dict)
 
     async def upload_photo(
@@ -57,6 +58,25 @@ class FakeMediaProvider:
         self.last_video_uid = uid
         self.videos[uid] = StreamVideo(0, "processing", False)
         return uid, f"https://stream-upload.example/{uid}"
+
+    async def upload_video(
+        self,
+        *,
+        clue_id: str,
+        original_filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> str:
+        uid, _upload_url = await self.create_video_upload(
+            clue_id=clue_id,
+            original_filename=original_filename,
+        )
+        self.videos[uid] = StreamVideo(
+            len(content),
+            self.next_video_status,
+            self.next_video_status == "ready",
+        )
+        return uid
 
     async def video_details(self, uid: str) -> StreamVideo:
         return self.videos[uid]
@@ -126,39 +146,16 @@ async def upload_media(
 ):
     cookies, headers = auth(app, admin)
     path = f"/api/v1/admin/clues/{clue.id}/media/{media_type}"
-    if media_type == "photo":
-        return await app.asgi_client.put(
-            path,
-            content=content,
-            cookies=cookies,
-            headers={
-                **headers,
-                "Content-Type": content_type,
-                "X-File-Name": filename,
-            },
-        )
-    _request, initiated = await app.asgi_client.post(
-        f"{path}/upload",
-        json={
-            "original_filename": filename,
-            "content_type": content_type,
-            "size_bytes": len(content),
+    provider.next_video_status = video_status
+    return await app.asgi_client.put(
+        path,
+        content=content,
+        cookies=cookies,
+        headers={
+            **headers,
+            "Content-Type": content_type,
+            "X-File-Name": filename,
         },
-        cookies=cookies,
-        headers=headers,
-    )
-    assert initiated.status == 200
-    assert provider.last_video_uid
-    provider.videos[provider.last_video_uid] = StreamVideo(
-        len(content),
-        video_status,
-        video_status == "ready",
-    )
-    return await app.asgi_client.post(
-        f"{path}/complete",
-        json={"upload_token": initiated.json["upload_token"]},
-        cookies=cookies,
-        headers=headers,
     )
 
 
@@ -214,7 +211,6 @@ async def test_admin_uploads_cloudflare_media_and_player_gets_private_redirects(
     async with app.ctx.db.session() as db:
         assert await db.scalar(select(func.count(ClueMedia.id))) == 2
         actions = set((await db.scalars(select(AuditEvent.action))).all())
-        assert "clue.media_upload_started" in actions
         assert "clue.media_attached" in actions
 
 

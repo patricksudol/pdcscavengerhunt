@@ -952,36 +952,13 @@ function MediaAttachmentEditor({
       file: File;
     }) => {
       const path = `/api/v1/admin/clues/${clue.id}/media/${mediaType}`;
-      if (mediaType === "photo") {
-        return api<ClueMedia>(path, {
-          method: "PUT",
-          body: file,
-          headers: {
-            "Content-Type": file.type,
-            "X-File-Name": encodeURIComponent(file.name),
-          },
-        });
-      }
-      const uploadDetails = await postJson<{
-        upload_url: string;
-        upload_method: "POST";
-        upload_token: string;
-      }>(`${path}/upload`, {
-        original_filename: file.name,
-        content_type: file.type,
-        size_bytes: file.size,
-      });
-      const body = new FormData();
-      body.append("file", file);
-      const response = await fetch(uploadDetails.upload_url, {
-        method: uploadDetails.upload_method,
-        body,
-      });
-      if (!response.ok) {
-        throw new Error("Cloudflare could not receive this media file");
-      }
-      return postJson<ClueMedia>(`${path}/complete`, {
-        upload_token: uploadDetails.upload_token,
+      return api<ClueMedia>(path, {
+        method: "PUT",
+        body: file,
+        headers: {
+          "Content-Type": file.type,
+          "X-File-Name": encodeURIComponent(file.name),
+        },
       });
     },
     onSuccess: (media) => {

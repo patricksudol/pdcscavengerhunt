@@ -154,6 +154,40 @@ class CloudflareMediaProvider:
         except (httpx.HTTPError, KeyError, TypeError, ValueError) as error:
             raise MediaProviderError("Unable to create the Stream upload") from error
 
+    async def upload_video(
+        self,
+        *,
+        clue_id: str,
+        original_filename: str,
+        content: bytes,
+        content_type: str,
+    ) -> str:
+        uid, upload_url = await self.create_video_upload(
+            clue_id=clue_id,
+            original_filename=original_filename,
+        )
+        try:
+            timeout = httpx.Timeout(300, connect=30)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    upload_url,
+                    files={
+                        "file": (
+                            original_filename,
+                            content,
+                            content_type,
+                        )
+                    },
+                )
+                response.raise_for_status()
+            return uid
+        except httpx.HTTPError as error:
+            try:
+                await self.delete_video(uid)
+            except MediaProviderError:
+                pass
+            raise MediaProviderError("Unable to upload the Stream video") from error
+
     async def video_details(self, uid: str) -> StreamVideo:
         try:
             async with httpx.AsyncClient(timeout=30) as client:
