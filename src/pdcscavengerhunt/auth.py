@@ -19,7 +19,7 @@ from .security import (
     hash_password,
     issue_session,
     login_required,
-    normalize_username,
+    normalize_email_address,
     verify_password,
 )
 
@@ -33,8 +33,8 @@ def setup_token_hash(token: str) -> str:
 def user_json(user: User) -> dict:
     return {
         "id": str(user.id),
-        "username": user.username,
-        "display_name": user.display_name,
+        "email_address": user.email_address,
+        "full_name": user.full_name,
         "is_admin": user.is_admin,
     }
 
@@ -42,11 +42,11 @@ def user_json(user: User) -> dict:
 @auth_bp.post("/login")
 async def login(request: Request):
     payload = request.json or {}
-    username = str(payload.get("username", "")).strip()
+    email_address = str(payload.get("email_address", "")).strip()
     password = str(payload.get("password", ""))
-    if not username or not password:
-        raise InvalidUsage("Username and password are required")
-    normalized = normalize_username(username)
+    if not email_address or not password:
+        raise InvalidUsage("Email address and password are required")
+    normalized = normalize_email_address(email_address)
     check_rate_limit(
         request,
         namespace="login",
@@ -57,7 +57,7 @@ async def login(request: Request):
     user: User | None = None
     async with request.app.ctx.db.session() as db:
         user = await db.scalar(
-            select(User).where(User.normalized_username == normalized)
+            select(User).where(User.normalized_email_address == normalized)
         )
         password_hash = user.password_hash if user else DUMMY_PASSWORD_HASH
         authenticated = bool(user and user.active and verify_password(password, password_hash))
@@ -142,7 +142,7 @@ async def password_setup_details(request: Request, token: str):
     if not row:
         raise InvalidUsage("This invitation is invalid or expired")
     _setup_token, user = row
-    return {"username": user.username, "display_name": user.display_name}
+    return {"email_address": user.email_address, "full_name": user.full_name}
 
 
 @auth_bp.post("/password-setup/<token:str>")
@@ -203,4 +203,3 @@ async def change_password(request: Request):
     response = json({"password_changed": True})
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
-

@@ -22,7 +22,7 @@ PASSWORD_ALGORITHM = "scrypt"
 SESSION_COOKIE = "pdc_hunt_session"
 
 
-def normalize_username(value: str) -> str:
+def normalize_email_address(value: str) -> str:
     return unicodedata.normalize("NFKC", value).strip().casefold()
 
 
@@ -151,4 +151,3 @@ def check_rate_limit(
 def clear_rate_limit(request: Request, *, namespace: str, identity: str) -> None:
     key = hashlib.sha256(f"{namespace}\0{request.ip}\0{identity}".encode()).hexdigest()
     request.app.ctx.rate_limits.pop(key, None)
-

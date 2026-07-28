@@ -24,7 +24,7 @@ services:
         generateValue: true
       - key: PDC_SECURE_COOKIES
         value: "true"
-      - key: PDC_SEED_ADMIN_USERNAME
+      - key: PDC_SEED_ADMIN_EMAIL
         sync: false
       - key: PDC_SEED_ADMIN_PASSWORD
         sync: false

@@ -57,13 +57,15 @@ export function Field({
 
 export function TextArea({
   label,
+  hint,
   ...props
-}: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }) {
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string; hint?: string }) {
   const id = props.id ?? props.name;
   return (
     <label className="field" htmlFor={id}>
       <span>{label}</span>
       <textarea id={id} {...props} />
+      {hint && <small>{hint}</small>}
     </label>
   );
 }
@@ -126,4 +128,3 @@ export function Modal({
     </div>
   );
 }
-

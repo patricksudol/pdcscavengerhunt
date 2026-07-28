@@ -13,8 +13,8 @@ async def test_admin_can_invite_player_and_invite_is_single_use(app, admin):
     _request, created = await app.asgi_client.post(
         "/api/v1/admin/users",
         json={
-            "username": "player.one",
-            "display_name": "Player One",
+            "email_address": "player.one@example.com",
+            "full_name": "Player One",
             "is_admin": False,
         },
         cookies=cookies,
@@ -28,7 +28,7 @@ async def test_admin_can_invite_player_and_invite_is_single_use(app, admin):
         f"/api/v1/auth/password-setup/{token}"
     )
     assert details.status == 200
-    assert details.json["username"] == "player.one"
+    assert details.json["email_address"] == "player.one@example.com"
 
     _request, completed = await app.asgi_client.post(
         f"/api/v1/auth/password-setup/{token}",
@@ -44,7 +44,9 @@ async def test_admin_can_invite_player_and_invite_is_single_use(app, admin):
 
     async with app.ctx.db.session() as db:
         player = await db.scalar(
-            select(User).where(User.normalized_username == "player.one")
+            select(User).where(
+                User.normalized_email_address == "player.one@example.com"
+            )
         )
         assert player
         assert verify_password("strong-player-password", player.password_hash)
@@ -53,16 +55,19 @@ async def test_admin_can_invite_player_and_invite_is_single_use(app, admin):
 async def test_player_can_login_and_admin_api_is_forbidden(app, admin):
     async with app.ctx.db.session() as db:
         player = User(
-            username="hunter",
-            normalized_username="hunter",
-            display_name="Hunter",
+            email_address="hunter@example.com",
+            normalized_email_address="hunter@example.com",
+            full_name="Hunter",
             password_hash=admin.password_hash,
         )
         db.add(player)
 
     _request, login = await app.asgi_client.post(
         "/api/v1/auth/login",
-        json={"username": "HUNTER", "password": "test-admin-password"},
+        json={
+            "email_address": "HUNTER@EXAMPLE.COM",
+            "password": "test-admin-password",
+        },
     )
     assert login.status == 200
     assert login.json["user"]["is_admin"] is False
@@ -88,7 +93,10 @@ async def test_regenerating_setup_link_invalidates_previous_link(app, admin):
     cookies, headers = auth(app, admin)
     _request, created = await app.asgi_client.post(
         "/api/v1/admin/users",
-        json={"username": "invitee", "display_name": "Invitee"},
+        json={
+            "email_address": "invitee@example.com",
+            "full_name": "Invitee",
+        },
         cookies=cookies,
         headers=headers,
     )
@@ -114,4 +122,3 @@ async def test_regenerating_setup_link_invalidates_previous_link(app, admin):
         tokens = list((await db.scalars(select(PasswordSetupToken))).all())
         assert len(tokens) == 2
         assert sum(token.used_at is None for token in tokens) == 1
-

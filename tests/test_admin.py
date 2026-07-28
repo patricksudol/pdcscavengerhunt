@@ -21,9 +21,9 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
     cookies, headers = auth(app, admin)
     async with app.ctx.db.session() as db:
         player = User(
-            username="configured-player",
-            normalized_username="configured-player",
-            display_name="Configured Player",
+            email_address="configured-player@example.com",
+            normalized_email_address="configured-player@example.com",
+            full_name="Configured Player",
         )
         db.add(player)
         await db.flush()
@@ -34,11 +34,13 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
             "title": "Configured Hunt",
             "description": "A test hunt",
             "instructions": "Stay on the sidewalk.",
+            "closing_message": "Thanks for playing!",
         },
         cookies=cookies,
         headers=headers,
     )
     assert created.status == 201
+    assert created.json["closing_message"] == "Thanks for playing!"
     game_id = created.json["id"]
 
     _request, membership = await app.asgi_client.put(
@@ -58,6 +60,7 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
             headers=headers,
         )
         assert clue.status == 201
+        assert clue.json["code"] == code
         clue_ids.append(clue.json["id"])
 
     _request, duplicate_code = await app.asgi_client.post(
@@ -75,6 +78,17 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
         headers=headers,
     )
     assert reordered.status == 200
+
+    _request, detail = await app.asgi_client.get(
+        f"/api/v1/admin/games/{game_id}",
+        cookies=cookies,
+        headers=headers,
+    )
+    assert detail.status == 200
+    assert {clue["code"] for clue in detail.json["clues"]} == {
+        "UNIQUE-ONE",
+        "UNIQUE-TWO",
+    }
 
     _request, opened = await app.asgi_client.patch(
         f"/api/v1/admin/games/{game_id}",
@@ -99,6 +113,7 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
         )
         actions = set((await db.scalars(select(AuditEvent.action))).all())
         assert membership_row.user_id == player.id
+        assert game.closing_message == "Thanks for playing!"
         assert [str(clue.id) for clue in clues] == list(reversed(clue_ids))
         expected_actions = {
             "game.created",
@@ -121,12 +136,43 @@ async def test_admin_cannot_remove_own_admin_access(app, admin):
         assert response.status == 400
 
 
+async def test_admin_can_edit_full_name_and_email_address(app, admin):
+    async with app.ctx.db.session() as db:
+        player = User(
+            email_address="before@example.com",
+            normalized_email_address="before@example.com",
+            full_name="Before Name",
+        )
+        db.add(player)
+        await db.flush()
+        player_id = player.id
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.patch(
+        f"/api/v1/admin/users/{player_id}",
+        json={
+            "email_address": "After.Name@Example.com",
+            "full_name": "After Name",
+        },
+        cookies=cookies,
+        headers=headers,
+    )
+    assert response.status == 200
+    assert response.json["email_address"] == "After.Name@example.com"
+    assert response.json["full_name"] == "After Name"
+
+    async with app.ctx.db.session() as db:
+        stored = await db.get(User, player_id)
+        assert stored
+        assert stored.normalized_email_address == "after.name@example.com"
+
+
 async def test_admin_can_reset_player_progress_with_reason(app, admin):
     async with app.ctx.db.session() as db:
         player = User(
-            username="reset-player",
-            normalized_username="reset-player",
-            display_name="Reset Player",
+            email_address="reset-player@example.com",
+            normalized_email_address="reset-player@example.com",
+            full_name="Reset Player",
         )
         game = Game(title="Reset Game", status="open")
         db.add_all([player, game])
@@ -166,3 +212,78 @@ async def test_admin_can_reset_player_progress_with_reason(app, admin):
         )
         assert event
         assert event.reason == "Player requested a restart"
+
+
+async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
+    async with app.ctx.db.session() as db:
+        player = User(
+            email_address="targeted-reset@example.com",
+            normalized_email_address="targeted-reset@example.com",
+            full_name="Targeted Reset",
+        )
+        game = Game(title="Targeted Reset Game", status="open")
+        db.add_all([player, game])
+        await db.flush()
+        membership = GamePlayer(game_id=game.id, user_id=player.id)
+        clues = [
+            Clue(
+                game_id=game.id,
+                position=position,
+                title=f"Clue {position}",
+                content=f"Answer {position}",
+                code_fingerprint=fingerprint_code(
+                    f"TARGET-{position}", app.ctx.settings
+                ),
+            )
+            for position in range(1, 4)
+        ]
+        db.add_all([membership, *clues])
+        await db.flush()
+        db.add_all(
+            [
+                ClueCompletion(
+                    game_player_id=membership.id,
+                    clue_id=clue.id,
+                )
+                for clue in clues
+            ]
+        )
+        membership_id = membership.id
+        target_clue_id = clues[1].id
+        retained_clue_id = clues[0].id
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.request(
+        "DELETE",
+        f"/api/v1/admin/game-players/{membership_id}/progress",
+        json={
+            "reason": "Return player to the second clue",
+            "clue_id": str(target_clue_id),
+        },
+        cookies=cookies,
+        headers=headers,
+    )
+    assert response.status == 200
+    assert response.json["completion_count"] == 1
+    assert response.json["target_clue_id"] == str(target_clue_id)
+
+    async with app.ctx.db.session() as db:
+        remaining_clue_ids = set(
+            (
+                await db.scalars(
+                    select(ClueCompletion.clue_id).where(
+                        ClueCompletion.game_player_id == membership_id
+                    )
+                )
+            ).all()
+        )
+        assert remaining_clue_ids == {retained_clue_id}
+        event = await db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "player.progress_reset",
+                AuditEvent.entity_id == str(membership_id),
+            )
+        )
+        assert event
+        assert event.after["completion_count"] == 1
+        assert event.after["target_position"] == 2

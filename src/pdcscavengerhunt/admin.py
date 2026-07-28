@@ -29,7 +29,12 @@ from .schemas import (
     UserCreate,
     UserUpdate,
 )
-from .security import fingerprint_code, login_required, normalize_username
+from .security import (
+    fingerprint_code,
+    login_required,
+    normalize_code,
+    normalize_email_address,
+)
 
 admin_bp = Blueprint("admin", url_prefix="/api/v1/admin")
 
@@ -59,8 +64,8 @@ def audit(
 def user_json(user: User, *, game_count: int | None = None) -> dict:
     result = {
         "id": str(user.id),
-        "username": user.username,
-        "display_name": user.display_name,
+        "email_address": user.email_address,
+        "full_name": user.full_name,
         "is_admin": user.is_admin,
         "active": user.active,
         "password_set": user.password_hash is not None,
@@ -84,6 +89,7 @@ def game_json(
         "title": game.title,
         "description": game.description,
         "instructions": game.instructions,
+        "closing_message": game.closing_message,
         "status": game.status.value,
         "player_count": player_count,
         "clue_count": clue_count,
@@ -142,7 +148,7 @@ async def list_users(request: Request):
                 select(User, func.count(GamePlayer.id))
                 .outerjoin(GamePlayer, GamePlayer.user_id == User.id)
                 .group_by(User.id)
-                .order_by(User.display_name, User.username)
+                .order_by(User.full_name, User.email_address)
             )
         ).all()
         return [user_json(user, game_count=count) for user, count in rows]
@@ -152,16 +158,16 @@ async def list_users(request: Request):
 @login_required(admin=True)
 async def create_user(request: Request):
     payload = UserCreate.model_validate(request.json or {})
-    normalized = normalize_username(payload.username)
+    normalized = normalize_email_address(str(payload.email_address))
     async with request.app.ctx.db.session() as db:
         if await db.scalar(
-            select(User.id).where(User.normalized_username == normalized)
+            select(User.id).where(User.normalized_email_address == normalized)
         ):
-            raise SanicException("That username is already in use", status_code=409)
+            raise SanicException("That email address is already in use", status_code=409)
         user = User(
-            username=payload.username,
-            normalized_username=normalized,
-            display_name=payload.display_name.strip(),
+            email_address=str(payload.email_address).strip(),
+            normalized_email_address=normalized,
+            full_name=payload.full_name.strip(),
             is_admin=payload.is_admin,
         )
         db.add(user)
@@ -203,11 +209,30 @@ async def update_user(request: Request, user_id: UUID):
             if (admin_count or 0) <= 1:
                 raise InvalidUsage("At least one active administrator is required")
         before = user_json(user)
+        if email_address := changes.pop("email_address", None):
+            normalized = normalize_email_address(str(email_address))
+            duplicate = await db.scalar(
+                select(User.id).where(
+                    User.normalized_email_address == normalized,
+                    User.id != user.id,
+                )
+            )
+            if duplicate:
+                raise SanicException(
+                    "That email address is already in use",
+                    status_code=409,
+                )
+            user.email_address = str(email_address).strip()
+            user.normalized_email_address = normalized
         for key, value in changes.items():
-            if key == "display_name" and value is not None:
+            if key == "full_name" and value is not None:
                 value = value.strip()
             setattr(user, key, value)
-        if "active" in changes or "is_admin" in changes:
+        if (
+            email_address
+            or "active" in changes
+            or "is_admin" in changes
+        ):
             user.session_version += 1
         await db.flush()
         after = user_json(user)
@@ -283,6 +308,7 @@ async def create_game(request: Request):
             title=payload.title.strip(),
             description=payload.description,
             instructions=payload.instructions,
+            closing_message=payload.closing_message,
             created_by_id=request.ctx.user.id,
         )
         db.add(game)
@@ -319,22 +345,29 @@ async def get_game(request: Request, game_id: UUID):
                     select(GamePlayer, User)
                     .join(User, User.id == GamePlayer.user_id)
                     .where(GamePlayer.game_id == game.id)
-                    .order_by(User.display_name)
+                    .order_by(User.full_name)
                 )
             ).all()
         )
         progress = []
         for membership, user in members:
-            completed = await db.scalar(
-                select(func.count(ClueCompletion.id)).where(
-                    ClueCompletion.game_player_id == membership.id
-                )
+            completed_clue_ids = list(
+                (
+                    await db.scalars(
+                        select(ClueCompletion.clue_id).where(
+                            ClueCompletion.game_player_id == membership.id
+                        )
+                    )
+                ).all()
             )
             progress.append(
                 {
                     "membership_id": str(membership.id),
                     "user": user_json(user),
-                    "completed_count": completed or 0,
+                    "completed_count": len(completed_clue_ids),
+                    "completed_clue_ids": [
+                        str(clue_id) for clue_id in completed_clue_ids
+                    ],
                 }
             )
         return {
@@ -350,6 +383,7 @@ async def get_game(request: Request, game_id: UUID):
                     "position": clue.position,
                     "title": clue.title,
                     "content": clue.content,
+                    "code": clue.code,
                     "code_set": True,
                 }
                 for clue in clues
@@ -465,6 +499,7 @@ async def create_clue(request: Request, game_id: UUID):
             position=(max_position or 0) + 1,
             title=payload.title.strip(),
             content=payload.content.strip(),
+            code=normalize_code(payload.code),
             code_fingerprint=fingerprint,
         )
         db.add(clue)
@@ -483,6 +518,7 @@ async def create_clue(request: Request, game_id: UUID):
             "position": clue.position,
             "title": clue.title,
             "content": clue.content,
+            "code": clue.code,
             "code_set": True,
         }, 201
 
@@ -498,9 +534,11 @@ async def update_clue(request: Request, clue_id: UUID):
             raise NotFound("Clue not found")
         before = {"title": clue.title, "content": clue.content}
         if "code" in changes:
-            fingerprint = fingerprint_code(changes.pop("code"), request.app.ctx.settings)
+            submitted_code = changes.pop("code")
+            fingerprint = fingerprint_code(submitted_code, request.app.ctx.settings)
             if not await code_available(db, fingerprint, excluding=clue.id):
                 raise SanicException("That clue code is already in use", status_code=409)
+            clue.code = normalize_code(submitted_code)
             clue.code_fingerprint = fingerprint
         for key, value in changes.items():
             setattr(clue, key, value.strip() if isinstance(value, str) else value)
@@ -521,6 +559,7 @@ async def update_clue(request: Request, clue_id: UUID):
             "position": clue.position,
             "title": clue.title,
             "content": clue.content,
+            "code": clue.code,
             "code_set": True,
         }
 
@@ -615,15 +654,41 @@ async def reset_progress(request: Request, membership_id: UUID):
         membership = await db.get(GamePlayer, membership_id)
         if not membership:
             raise NotFound("Game assignment not found")
+        target_clue = None
+        if payload.clue_id:
+            target_clue = await db.get(Clue, payload.clue_id)
+            if not target_clue or target_clue.game_id != membership.game_id:
+                raise InvalidUsage("That clue does not belong to this game")
+            target_completion = await db.scalar(
+                select(ClueCompletion.id).where(
+                    ClueCompletion.game_player_id == membership.id,
+                    ClueCompletion.clue_id == target_clue.id,
+                )
+            )
+            if not target_completion:
+                raise InvalidUsage("The player has not completed that clue")
         completion_count = await db.scalar(
             select(func.count(ClueCompletion.id)).where(
                 ClueCompletion.game_player_id == membership.id
             )
         )
-        await db.execute(
-            delete(ClueCompletion).where(
-                ClueCompletion.game_player_id == membership.id
+        reset_filter = ClueCompletion.game_player_id == membership.id
+        if target_clue:
+            reset_filter = reset_filter & ClueCompletion.clue_id.in_(
+                select(Clue.id).where(
+                    Clue.game_id == membership.game_id,
+                    Clue.position >= target_clue.position,
+                )
             )
+        await db.execute(delete(ClueCompletion).where(reset_filter))
+        await db.flush()
+        remaining_count = (
+            await db.scalar(
+                select(func.count(ClueCompletion.id)).where(
+                    ClueCompletion.game_player_id == membership.id
+                )
+            )
+            or 0
         )
         db.add(
             audit(
@@ -632,8 +697,16 @@ async def reset_progress(request: Request, membership_id: UUID):
                 entity_type="game_player",
                 entity_id=str(membership.id),
                 before={"completion_count": completion_count or 0},
-                after={"completion_count": 0},
+                after={
+                    "completion_count": remaining_count,
+                    "target_clue_id": str(target_clue.id) if target_clue else None,
+                    "target_position": target_clue.position if target_clue else None,
+                },
                 reason=payload.reason.strip(),
             )
         )
-        return {"reset": True, "completion_count": 0}
+        return {
+            "reset": True,
+            "completion_count": remaining_count,
+            "target_clue_id": str(target_clue.id) if target_clue else None,
+        }

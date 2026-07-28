@@ -39,9 +39,11 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
-    username: Mapped[str] = mapped_column(String(80))
-    normalized_username: Mapped[str] = mapped_column(String(80), unique=True, index=True)
-    display_name: Mapped[str] = mapped_column(String(180))
+    email_address: Mapped[str] = mapped_column(String(320))
+    normalized_email_address: Mapped[str] = mapped_column(
+        String(320), unique=True, index=True
+    )
+    full_name: Mapped[str] = mapped_column(String(180))
     password_hash: Mapped[str | None] = mapped_column(String(255))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
@@ -82,6 +84,7 @@ class Game(Base):
     title: Mapped[str] = mapped_column(String(180))
     description: Mapped[str | None] = mapped_column(Text)
     instructions: Mapped[str | None] = mapped_column(Text)
+    closing_message: Mapped[str | None] = mapped_column(Text)
     status: Mapped[GameStatus] = mapped_column(
         Enum(GameStatus, native_enum=False), default=GameStatus.draft, index=True
     )
@@ -144,6 +147,7 @@ class Clue(Base):
     position: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(180))
     content: Mapped[str] = mapped_column(Text)
+    code: Mapped[str | None] = mapped_column(String(120))
     code_fingerprint: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(

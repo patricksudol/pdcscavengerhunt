@@ -46,9 +46,22 @@ def create_app(
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        if request.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store"
         if settings.environment == "production":
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"
+            )
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "base-uri 'self'; "
+                "connect-src 'self'; "
+                "font-src 'self' https://fonts.gstatic.com; "
+                "form-action 'self'; "
+                "frame-ancestors 'none'; "
+                "img-src 'self' data:; "
+                "script-src 'self'; "
+                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
             )
         return response
 
@@ -106,4 +119,3 @@ def create_app(
 
 
 app = create_app()
-

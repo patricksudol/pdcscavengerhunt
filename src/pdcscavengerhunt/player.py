@@ -58,6 +58,7 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
         (index for index, clue in enumerate(clues) if clue.id not in completion_map),
         len(clues),
     )
+    is_complete = bool(clues) and len(completions) == len(clues)
     clue_data = []
     for index, clue in enumerate(clues):
         completion = completion_map.get(clue.id)
@@ -67,8 +68,8 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
                     "id": str(clue.id),
                     "position": clue.position,
                     "status": "completed",
-                    "title": clue.title,
-                    "content": clue.content,
+                    "clue": clue.title,
+                    "answer": clue.content,
                     "completed_at": completion.completed_at.isoformat(),
                 }
             )
@@ -78,6 +79,7 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
                     "id": str(clue.id),
                     "position": clue.position,
                     "status": "current",
+                    "clue": clue.title,
                 }
             )
         else:
@@ -87,10 +89,11 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
         "title": game.title,
         "description": game.description,
         "instructions": game.instructions,
+        "closing_message": game.closing_message if is_complete else None,
         "status": game.status.value,
         "completed_count": len(completions),
         "clue_count": len(clues),
-        "complete": bool(clues) and len(completions) == len(clues),
+        "complete": is_complete,
         "clues": clue_data,
     }
 

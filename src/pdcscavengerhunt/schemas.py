@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from uuid import UUID
+
+from pydantic import BaseModel, EmailStr, Field
 
 from .models import GameStatus
 
@@ -14,21 +16,14 @@ class PasswordChange(PasswordSet):
 
 
 class UserCreate(BaseModel):
-    username: str = Field(min_length=3, max_length=80)
-    display_name: str = Field(min_length=1, max_length=180)
+    email_address: EmailStr
+    full_name: str = Field(min_length=1, max_length=180)
     is_admin: bool = False
-
-    @field_validator("username")
-    @classmethod
-    def valid_username(cls, value: str) -> str:
-        value = value.strip()
-        if not all(character.isalnum() or character in "._-" for character in value):
-            raise ValueError("Use only letters, numbers, periods, underscores, or hyphens")
-        return value
 
 
 class UserUpdate(BaseModel):
-    display_name: str | None = Field(default=None, min_length=1, max_length=180)
+    email_address: EmailStr | None = None
+    full_name: str | None = Field(default=None, min_length=1, max_length=180)
     is_admin: bool | None = None
     active: bool | None = None
 
@@ -37,12 +32,14 @@ class GameCreate(BaseModel):
     title: str = Field(min_length=1, max_length=180)
     description: str | None = Field(default=None, max_length=5000)
     instructions: str | None = Field(default=None, max_length=5000)
+    closing_message: str | None = Field(default=None, max_length=5000)
 
 
 class GameUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=180)
     description: str | None = Field(default=None, max_length=5000)
     instructions: str | None = Field(default=None, max_length=5000)
+    closing_message: str | None = Field(default=None, max_length=5000)
     status: GameStatus | None = None
 
 
@@ -72,3 +69,4 @@ class MembershipUpdate(BaseModel):
 
 class ProgressReset(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
+    clue_id: UUID | None = None

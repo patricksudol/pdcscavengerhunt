@@ -11,7 +11,7 @@ export function SetupPasswordPage({ token }: { token: string }) {
   const details = useQuery({
     queryKey: ["setup-password", token],
     queryFn: () =>
-      api<{ username: string; display_name: string }>(
+      api<{ email_address: string; full_name: string }>(
         `/api/v1/auth/password-setup/${encodeURIComponent(token)}`,
       ),
     retry: false,
@@ -50,10 +50,10 @@ export function SetupPasswordPage({ token }: { token: string }) {
           </>
         ) : (
           <>
-            <div className="eyebrow">Welcome, {details.data?.display_name}</div>
+            <div className="eyebrow">Welcome, {details.data?.full_name}</div>
             <h1>Set your password</h1>
             <p>
-              Your username is <strong>{details.data?.username}</strong>. Choose a
+              Your email address is <strong>{details.data?.email_address}</strong>. Choose a
               password with at least 12 characters.
             </p>
             <form onSubmit={submit}>

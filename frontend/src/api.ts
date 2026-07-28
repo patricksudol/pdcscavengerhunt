@@ -2,8 +2,8 @@ export type GameStatus = "draft" | "open" | "closed";
 
 export interface Me {
   id: string;
-  username: string;
-  display_name: string;
+  email_address: string;
+  full_name: string;
   is_admin: boolean;
   csrf_token: string;
 }
@@ -21,21 +21,22 @@ export interface PlayerClue {
   id?: string;
   position: number;
   status: "completed" | "current" | "locked";
-  title?: string;
-  content?: string;
+  clue?: string;
+  answer?: string;
   completed_at?: string;
 }
 
 export interface PlayerGameDetail extends PlayerGame {
   instructions: string | null;
+  closing_message: string | null;
   complete: boolean;
   clues: PlayerClue[];
 }
 
 export interface AdminUser {
   id: string;
-  username: string;
-  display_name: string;
+  email_address: string;
+  full_name: string;
   is_admin: boolean;
   active: boolean;
   password_set: boolean;
@@ -49,6 +50,7 @@ export interface AdminGame {
   title: string;
   description: string | null;
   instructions: string | null;
+  closing_message: string | null;
   status: GameStatus;
   player_count: number;
   clue_count: number;
@@ -62,6 +64,7 @@ export interface AdminClue {
   position: number;
   title: string;
   content: string;
+  code: string | null;
   code_set: boolean;
 }
 
@@ -71,6 +74,7 @@ export interface AdminGameDetail extends AdminGame {
     membership_id: string;
     user: AdminUser;
     completed_count: number;
+    completed_clue_ids: string[];
   }[];
 }
 
@@ -126,4 +130,3 @@ export function formatDate(value: string): string {
     timeZone: "America/New_York",
   }).format(new Date(value));
 }
-

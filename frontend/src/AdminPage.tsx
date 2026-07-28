@@ -1,12 +1,31 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   BarChart3,
   Check,
   ChevronDown,
   ChevronUp,
   Clipboard,
   Gamepad2,
+  GripVertical,
   KeyRound,
   ListChecks,
   LockKeyhole,
@@ -73,8 +92,8 @@ export function AdminPage({ me }: { me: Me }) {
           <a href="/"><ListChecks /> Player view</a>
         </nav>
         <div className="sidebar__user">
-          <div>{initials(me.display_name)}</div>
-          <span><strong>{me.display_name}</strong><small>Administrator</small></span>
+          <div>{initials(me.full_name)}</div>
+          <span><strong>{me.full_name}</strong><small>Administrator</small></span>
           <button className="icon-button" onClick={() => logout.mutate()} aria-label="Sign out"><LogOut /></button>
         </div>
       </aside>
@@ -82,7 +101,7 @@ export function AdminPage({ me }: { me: Me }) {
         <header className="admin-topbar">
           <button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="Open menu"><Menu /></button>
           <div><span>Administration</span><strong>PDC Scavenger Hunt</strong></div>
-          <span className="admin-topbar__user">{me.username}</span>
+          <span className="admin-topbar__user">{me.email_address}</span>
         </header>
         <main className="admin-content">{page}</main>
       </div>
@@ -166,7 +185,7 @@ function Players() {
             <div className="user-table user-table--head"><span>Player</span><span>Games</span><span>Access</span><span>Status</span><span>Actions</span></div>
             {users.data.map((user) => (
               <div className="user-table" key={user.id}>
-                <span className="person-cell"><span className="avatar">{initials(user.display_name)}</span><span><strong>{user.display_name}</strong><small>@{user.username}</small></span></span>
+                <span className="person-cell"><span className="avatar">{initials(user.full_name)}</span><span><strong>{user.full_name}</strong><small>{user.email_address}</small></span></span>
                 <span>{user.game_count ?? 0}</span>
                 <span>
                   <label className="switch-label">
@@ -193,18 +212,19 @@ function Players() {
 }
 
 function EditPlayer({ user, onClose, onSaved }: { user: AdminUser; onClose: () => void; onSaved: () => void }) {
-  const [displayName, setDisplayName] = useState(user.display_name);
+  const [fullName, setFullName] = useState(user.full_name);
+  const [emailAddress, setEmailAddress] = useState(user.email_address);
   const [isAdmin, setIsAdmin] = useState(user.is_admin);
   const [active, setActive] = useState(user.active);
   const save = useMutation({
-    mutationFn: () => postJson<AdminUser>(`/api/v1/admin/users/${user.id}`, { display_name: displayName, is_admin: isAdmin, active }, "PATCH"),
+    mutationFn: () => postJson<AdminUser>(`/api/v1/admin/users/${user.id}`, { full_name: fullName, email_address: emailAddress, is_admin: isAdmin, active }, "PATCH"),
     onSuccess: onSaved,
   });
   return (
     <Modal title="Edit player" onClose={onClose}>
       <form className="modal-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
-        <Field label="Display name" name="edit-display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
-        <Field label="Username" name="edit-username" value={user.username} disabled />
+        <Field label="Full name" name="edit-full-name" value={fullName} onChange={(event) => setFullName(event.target.value)} required />
+        <Field label="Email address" name="edit-email-address" type="email" value={emailAddress} onChange={(event) => setEmailAddress(event.target.value)} required />
         <label className="check-field"><input type="checkbox" checked={isAdmin} onChange={(event) => setIsAdmin(event.target.checked)} /><span><strong>Administrator</strong><small>Can configure games, clues, and players.</small></span></label>
         <label className="check-field"><input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /><span><strong>Active account</strong><small>Inactive users cannot sign in or play.</small></span></label>
         <ErrorMessage error={save.error} />
@@ -215,18 +235,18 @@ function EditPlayer({ user, onClose, onSaved }: { user: AdminUser; onClose: () =
 }
 
 function CreatePlayer({ onClose, onCreated }: { onClose: () => void; onCreated: (url: string) => void }) {
-  const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [emailAddress, setEmailAddress] = useState("");
+  const [fullName, setFullName] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const create = useMutation({
-    mutationFn: () => postJson<AdminUser & { setup_url: string }>("/api/v1/admin/users", { username, display_name: displayName, is_admin: isAdmin }),
+    mutationFn: () => postJson<AdminUser & { setup_url: string }>("/api/v1/admin/users", { email_address: emailAddress, full_name: fullName, is_admin: isAdmin }),
     onSuccess: (result) => onCreated(result.setup_url),
   });
   return (
     <Modal title="Add player" onClose={onClose}>
       <form className="modal-form" onSubmit={(event) => { event.preventDefault(); create.mutate(); }}>
-        <Field label="Display name" name="display-name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} required />
-        <Field label="Username" name="username" value={username} onChange={(event) => setUsername(event.target.value)} hint="Letters, numbers, periods, underscores, and hyphens." required minLength={3} />
+        <Field label="Full name" name="full-name" value={fullName} onChange={(event) => setFullName(event.target.value)} required />
+        <Field label="Email address" name="email-address" type="email" autoComplete="email" value={emailAddress} onChange={(event) => setEmailAddress(event.target.value)} required />
         <label className="check-field"><input type="checkbox" checked={isAdmin} onChange={(event) => setIsAdmin(event.target.checked)} /><span><strong>Administrator</strong><small>Can configure all games, clues, and players.</small></span></label>
         <ErrorMessage error={create.error} />
         <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={create.isPending} type="submit">Create & invite</Button></div>
@@ -290,8 +310,14 @@ function CreateGame({ onClose, onCreated }: { onClose: () => void; onCreated: (g
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
+  const [closingMessage, setClosingMessage] = useState("");
   const create = useMutation({
-    mutationFn: () => postJson<AdminGame>("/api/v1/admin/games", { title, description: description || null, instructions: instructions || null }),
+    mutationFn: () => postJson<AdminGame>("/api/v1/admin/games", {
+      title,
+      description: description || null,
+      instructions: instructions || null,
+      closing_message: closingMessage || null,
+    }),
     onSuccess: onCreated,
   });
   return (
@@ -300,10 +326,92 @@ function CreateGame({ onClose, onCreated }: { onClose: () => void; onCreated: (g
         <Field label="Game title" name="title" value={title} onChange={(event) => setTitle(event.target.value)} required />
         <TextArea label="Description" name="description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
         <TextArea label="Player instructions" name="instructions" rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
+        <TextArea label="Closing message" name="closing-message" rows={3} value={closingMessage} onChange={(event) => setClosingMessage(event.target.value)} hint="Shown after a player solves the final clue." />
         <ErrorMessage error={create.error} />
         <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={create.isPending} type="submit">Create game</Button></div>
       </form>
     </Modal>
+  );
+}
+
+function SortableClueRow({
+  clue,
+  index,
+  total,
+  busy,
+  copied,
+  onMove,
+  onEdit,
+  onDelete,
+  onCopy,
+}: {
+  clue: AdminClue;
+  index: number;
+  total: number;
+  busy: boolean;
+  copied: boolean;
+  onMove: (direction: -1 | 1) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onCopy: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: clue.id, disabled: busy });
+  return (
+    <article
+      className={`clue-admin-row ${isDragging ? "clue-admin-row--dragging" : ""}`}
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+    >
+      <div className="clue-drag-cell">
+        <button
+          className="clue-drag-handle"
+          type="button"
+          ref={setActivatorNodeRef}
+          disabled={busy}
+          aria-label={`Drag clue ${clue.position} to reorder`}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical aria-hidden="true" />
+        </button>
+        <span className="clue-position">{clue.position}</span>
+      </div>
+      <div className="clue-admin-details">
+        <strong>{clue.title}</strong>
+        <small>{clue.content}</small>
+        {clue.code ? (
+          <div className="clue-admin-code">
+            <span>Code</span>
+            <code>{clue.code}</code>
+            <button type="button" onClick={onCopy}>
+              {copied ? <Check /> : <Clipboard />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+        ) : (
+          <button className="clue-admin-set-code" type="button" onClick={onEdit}>
+            <KeyRound /> Set code
+          </button>
+        )}
+      </div>
+      <span className="clue-admin-actions">
+        <button className="icon-button" disabled={index === 0 || busy} onClick={() => onMove(-1)} aria-label="Move up"><ChevronUp /></button>
+        <button className="icon-button" disabled={index === total - 1 || busy} onClick={() => onMove(1)} aria-label="Move down"><ChevronDown /></button>
+        <button className="icon-button" onClick={onEdit} aria-label="Edit clue"><Pencil /></button>
+        <button className="icon-button danger-icon" onClick={onDelete} aria-label="Delete clue"><Trash2 /></button>
+      </span>
+    </article>
   );
 }
 
@@ -312,6 +420,16 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
   const [tab, setTab] = useState<"clues" | "players" | "progress">("clues");
   const [editingClue, setEditingClue] = useState<AdminClue | "new" | null>(null);
   const [editingGame, setEditingGame] = useState(false);
+  const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 180, tolerance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
   const detail = useQuery({
     queryKey: ["admin-game", gameId],
     queryFn: () => api<AdminGameDetail>(`/api/v1/admin/games/${gameId}`),
@@ -329,7 +447,28 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
   });
   const reorder = useMutation({
     mutationFn: (clueIds: string[]) => postJson(`/api/v1/admin/games/${gameId}/clues/reorder`, { clue_ids: clueIds }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-game", gameId] }),
+    onMutate: async (clueIds) => {
+      await queryClient.cancelQueries({ queryKey: ["admin-game", gameId] });
+      const previous = queryClient.getQueryData<AdminGameDetail>(["admin-game", gameId]);
+      queryClient.setQueryData<AdminGameDetail>(["admin-game", gameId], (current) => {
+        if (!current) return current;
+        const cluesById = new Map(current.clues.map((clue) => [clue.id, clue]));
+        return {
+          ...current,
+          clues: clueIds.map((id, index) => ({
+            ...cluesById.get(id)!,
+            position: index + 1,
+          })),
+        };
+      });
+      return { previous };
+    },
+    onError: (_error, _clueIds, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(["admin-game", gameId], context.previous);
+      }
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["admin-game", gameId] }),
   });
   const remove = useMutation({
     mutationFn: (id: string) => api(`/api/v1/admin/clues/${id}`, { method: "DELETE" }),
@@ -340,6 +479,30 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
     const ids = detail.data.clues.map((clue) => clue.id);
     [ids[index], ids[index + direction]] = [ids[index + direction], ids[index]];
     reorder.mutate(ids);
+  }
+  function finishDragging(event: DragEndEvent) {
+    if (!detail.data || !event.over || event.active.id === event.over.id) return;
+    const oldIndex = detail.data.clues.findIndex((clue) => clue.id === event.active.id);
+    const newIndex = detail.data.clues.findIndex((clue) => clue.id === event.over!.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    reorder.mutate(
+      arrayMove(detail.data.clues, oldIndex, newIndex).map((clue) => clue.id),
+    );
+  }
+  async function copyClueCode(clue: AdminClue) {
+    if (!clue.code) {
+      setEditingClue(clue);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(clue.code);
+      setCopiedCodeId(clue.id);
+      window.setTimeout(() => {
+        setCopiedCodeId((current) => current === clue.id ? null : current);
+      }, 1600);
+    } catch {
+      window.prompt("Copy clue code:", clue.code);
+    }
   }
   return (
     <div className="drawer-backdrop" onMouseDown={onClose}>
@@ -368,20 +531,39 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
           detail.isError || !detail.data ? <ErrorMessage error={detail.error} /> :
           tab === "clues" ? (
             <div className="drawer-section">
-              <div className="drawer-section__title"><div><h3>Clue order</h3><p>Players must unlock these from top to bottom.</p></div><Button onClick={() => setEditingClue("new")}><Plus /> Add clue</Button></div>
+              <div className="drawer-section__title"><div><h3>Clue order</h3><p>Drag clues into order. Players unlock them from top to bottom.</p></div><Button onClick={() => setEditingClue("new")}><Plus /> Add clue</Button></div>
               {!detail.data.clues.length ? <EmptyState icon={<LockKeyhole />} title="No clues">Add the first clue and its unique code.</EmptyState> :
-                <div className="clue-admin-list">{detail.data.clues.map((clue, index) => (
-                  <article className="clue-admin-row" key={clue.id}>
-                    <span className="clue-position">{clue.position}</span>
-                    <span><strong>{clue.title}</strong><small>{clue.content}</small></span>
-                    <span className="clue-admin-actions">
-                      <button className="icon-button" disabled={index === 0 || reorder.isPending} onClick={() => move(index, -1)} aria-label="Move up"><ChevronUp /></button>
-                      <button className="icon-button" disabled={index === detail.data!.clues.length - 1 || reorder.isPending} onClick={() => move(index, 1)} aria-label="Move down"><ChevronDown /></button>
-                      <button className="icon-button" onClick={() => setEditingClue(clue)} aria-label="Edit clue"><Pencil /></button>
-                      <button className="icon-button danger-icon" onClick={() => { if (window.confirm(`Delete clue ${clue.position}? Player completions for it will also be removed.`)) remove.mutate(clue.id); }} aria-label="Delete clue"><Trash2 /></button>
-                    </span>
-                  </article>
-                ))}</div>
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={finishDragging}
+                >
+                  <SortableContext
+                    items={detail.data.clues.map((clue) => clue.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <div className="clue-admin-list">
+                      {detail.data.clues.map((clue, index) => (
+                        <SortableClueRow
+                          clue={clue}
+                          index={index}
+                          total={detail.data!.clues.length}
+                          busy={reorder.isPending}
+                          copied={copiedCodeId === clue.id}
+                          key={clue.id}
+                          onMove={(direction) => move(index, direction)}
+                          onEdit={() => setEditingClue(clue)}
+                          onCopy={() => copyClueCode(clue)}
+                          onDelete={() => {
+                            if (window.confirm(`Delete clue ${clue.position}? Player completions for it will also be removed.`)) {
+                              remove.mutate(clue.id);
+                            }
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
               }
             </div>
           ) : tab === "players" ? (
@@ -398,31 +580,91 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
 }
 
 function ProgressEditor({ game }: { game: AdminGameDetail }) {
-  const queryClient = useQueryClient();
-  const reset = useMutation({
-    mutationFn: ({ membershipId, reason }: { membershipId: string; reason: string }) =>
-      postJson(`/api/v1/admin/game-players/${membershipId}/progress`, { reason }, "DELETE"),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin-game", game.id] }),
-  });
-  function resetPlayer(membershipId: string, name: string) {
-    const reason = window.prompt(`Why are you resetting ${name}'s progress?`);
-    if (reason?.trim()) reset.mutate({ membershipId, reason: reason.trim() });
-  }
+  const [resetting, setResetting] = useState<AdminGameDetail["players"][number] | null>(null);
   return (
     <div className="drawer-section">
-      <div className="drawer-section__title"><div><h3>Player progress</h3><p>Live completion totals for this game.</p></div></div>
-      <ErrorMessage error={reset.error} />
+      <div className="drawer-section__title"><div><h3>Player progress</h3><p>Reset a player to any completed clue or restart the entire game.</p></div></div>
       {!game.players.length ? <EmptyState icon={<Users />} title="No assigned players">Assign players to begin tracking progress.</EmptyState> :
         <div className="progress-list">{game.players.map((entry) => (
           <div key={entry.user.id}>
-            <span className="avatar">{initials(entry.user.display_name)}</span>
-            <span><strong>{entry.user.display_name}</strong><small>@{entry.user.username}</small></span>
+            <span className="avatar">{initials(entry.user.full_name)}</span>
+            <span><strong>{entry.user.full_name}</strong><small>{entry.user.email_address}</small></span>
             <div className="mini-progress"><div><span style={{ width: `${game.clue_count ? (entry.completed_count / game.clue_count) * 100 : 0}%` }} /></div><small>{entry.completed_count} / {game.clue_count}</small></div>
-            {entry.completed_count > 0 && <Button variant="quiet" busy={reset.isPending} onClick={() => resetPlayer(entry.membership_id, entry.user.display_name)}>Reset</Button>}
+            {entry.completed_count > 0 && <Button variant="quiet" onClick={() => setResetting(entry)}>Reset…</Button>}
           </div>
         ))}</div>
       }
+      {resetting && (
+        <ProgressResetEditor
+          game={game}
+          entry={resetting}
+          onClose={() => setResetting(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function ProgressResetEditor({
+  game,
+  entry,
+  onClose,
+}: {
+  game: AdminGameDetail;
+  entry: AdminGameDetail["players"][number];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [target, setTarget] = useState("all");
+  const [reason, setReason] = useState("");
+  const reset = useMutation({
+    mutationFn: () =>
+      postJson(
+        `/api/v1/admin/game-players/${entry.membership_id}/progress`,
+        { reason, clue_id: target === "all" ? null : target },
+        "DELETE",
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-game", game.id] });
+      onClose();
+    },
+  });
+  const completedClues = game.clues.filter((clue) =>
+    entry.completed_clue_ids.includes(clue.id),
+  );
+  return (
+    <Modal title={`Reset ${entry.user.full_name}`} onClose={onClose}>
+      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); reset.mutate(); }}>
+        <label className="field">
+          <span>Reset target</span>
+          <select value={target} onChange={(event) => setTarget(event.target.value)}>
+            <option value="all">Restart entire game</option>
+            {completedClues.map((clue) => (
+              <option value={clue.id} key={clue.id}>
+                Return to clue {clue.position}: {clue.title}
+              </option>
+            ))}
+          </select>
+          <small>Returning to a clue keeps all clues before it completed.</small>
+        </label>
+        <TextArea
+          label="Reason"
+          name="reset-reason"
+          rows={3}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          required
+          minLength={3}
+          maxLength={500}
+          hint="Required for the audit log."
+        />
+        <ErrorMessage error={reset.error} />
+        <div className="modal-actions">
+          <Button variant="quiet" type="button" onClick={onClose}>Cancel</Button>
+          <Button variant="danger" busy={reset.isPending} type="submit">Reset progress</Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -430,8 +672,14 @@ function GameDetailsEditor({ game, onClose, onSaved }: { game: AdminGameDetail; 
   const [title, setTitle] = useState(game.title);
   const [description, setDescription] = useState(game.description ?? "");
   const [instructions, setInstructions] = useState(game.instructions ?? "");
+  const [closingMessage, setClosingMessage] = useState(game.closing_message ?? "");
   const save = useMutation({
-    mutationFn: () => postJson(`/api/v1/admin/games/${game.id}`, { title, description: description || null, instructions: instructions || null }, "PATCH"),
+    mutationFn: () => postJson(`/api/v1/admin/games/${game.id}`, {
+      title,
+      description: description || null,
+      instructions: instructions || null,
+      closing_message: closingMessage || null,
+    }, "PATCH"),
     onSuccess: onSaved,
   });
   return (
@@ -440,6 +688,7 @@ function GameDetailsEditor({ game, onClose, onSaved }: { game: AdminGameDetail; 
         <Field label="Game title" name="edit-game-title" value={title} onChange={(event) => setTitle(event.target.value)} required />
         <TextArea label="Description" name="edit-game-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
         <TextArea label="Player instructions" name="edit-game-instructions" rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
+        <TextArea label="Closing message" name="edit-game-closing-message" rows={3} value={closingMessage} onChange={(event) => setClosingMessage(event.target.value)} hint="Shown after a player solves the final clue." />
         <ErrorMessage error={save.error} />
         <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={save.isPending} type="submit">Save details</Button></div>
       </form>
@@ -467,7 +716,7 @@ function MembershipEditor({ game, users }: { game: AdminGameDetail; users: Admin
       <div className="drawer-section__title"><div><h3>Assigned players</h3><p>Only selected active players can access this game.</p></div><Button busy={save.isPending} onClick={() => save.mutate()}>Save assignments</Button></div>
       <ErrorMessage error={save.error} />
       <div className="membership-list">{users.filter((user) => user.active).map((user) => (
-        <label key={user.id}><input type="checkbox" checked={selected.has(user.id)} onChange={() => toggle(user.id)} /><span className="avatar">{initials(user.display_name)}</span><span><strong>{user.display_name}</strong><small>@{user.username}{user.is_admin ? " · Admin" : ""}</small></span></label>
+        <label key={user.id}><input type="checkbox" checked={selected.has(user.id)} onChange={() => toggle(user.id)} /><span className="avatar">{initials(user.full_name)}</span><span><strong>{user.full_name}</strong><small>{user.email_address}{user.is_admin ? " · Admin" : ""}</small></span></label>
       ))}</div>
     </div>
   );
@@ -476,7 +725,7 @@ function MembershipEditor({ game, users }: { game: AdminGameDetail; users: Admin
 function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: AdminClue | null; onClose: () => void; onSaved: () => void }) {
   const [title, setTitle] = useState(clue?.title ?? "");
   const [content, setContent] = useState(clue?.content ?? "");
-  const [code, setCode] = useState("");
+  const [code, setCode] = useState(clue?.code ?? "");
   const save = useMutation({
     mutationFn: () => {
       const payload: { title: string; content: string; code?: string } = { title, content };
@@ -490,9 +739,23 @@ function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: 
   return (
     <Modal title={clue ? `Edit clue ${clue.position}` : "Add clue"} onClose={onClose}>
       <form className="modal-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
-        <Field label="Clue title" name="clue-title" value={title} onChange={(event) => setTitle(event.target.value)} required />
-        <TextArea label="Revealed content" name="content" rows={5} value={content} onChange={(event) => setContent(event.target.value)} required />
-        <Field label={clue ? "Replacement code (optional)" : "Unique code"} name="code" autoComplete="off" value={code} onChange={(event) => setCode(event.target.value)} required={!clue} hint={clue ? "Leave blank to keep the existing code." : "Codes are case-insensitive and cannot be reused."} />
+        <Field label="Clue" name="clue-title" value={title} onChange={(event) => setTitle(event.target.value)} required />
+        <TextArea label="Answer" name="content" rows={5} value={content} onChange={(event) => setContent(event.target.value)} required />
+        <Field
+          label={clue ? "Code" : "Unique code"}
+          name="code"
+          autoComplete="off"
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          required={!clue}
+          hint={
+            clue?.code
+              ? "Codes are case-insensitive. Edit this value to replace it."
+              : clue
+                ? "This legacy code cannot be recovered. Enter a replacement to make it visible here."
+                : "Codes are case-insensitive and cannot be reused."
+          }
+        />
         <ErrorMessage error={save.error} />
         <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={save.isPending} type="submit">Save clue</Button></div>
       </form>

@@ -30,7 +30,7 @@ services:
       PDC_PUBLIC_BASE_URL: ${PDC_PUBLIC_BASE_URL:-http://localhost:8000}
       PDC_SESSION_SECRET: ${PDC_SESSION_SECRET:-local-compose-session-secret-change-in-production}
       PDC_CLUE_CODE_SECRET: ${PDC_CLUE_CODE_SECRET:-local-compose-clue-secret-change-in-production}
-      PDC_SEED_ADMIN_USERNAME: ${PDC_SEED_ADMIN_USERNAME:-admin}
+      PDC_SEED_ADMIN_EMAIL: ${PDC_SEED_ADMIN_EMAIL:-admin@pdc.test}
       PDC_SEED_ADMIN_PASSWORD: ${PDC_SEED_ADMIN_PASSWORD:-demo-scavenger-2026}
       PDC_SEED_ADMIN_NAME: ${PDC_SEED_ADMIN_NAME:-Game Administrator}
       PDC_SECURE_COOKIES: "false"

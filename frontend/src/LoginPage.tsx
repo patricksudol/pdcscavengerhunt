@@ -6,7 +6,7 @@ import { api, Me, setCsrfToken } from "./api";
 import { Brand, Button, ErrorMessage, Field } from "./components";
 
 export function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
-  const [username, setUsername] = useState("");
+  const [emailAddress, setEmailAddress] = useState("");
   const [password, setPassword] = useState("");
   const login = useMutation({
     mutationFn: () =>
@@ -14,7 +14,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
         "/api/v1/auth/login",
         {
           method: "POST",
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({ email_address: emailAddress, password }),
         },
       ),
     onSuccess: (result) => {
@@ -36,7 +36,7 @@ export function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
           <div className="eyebrow">Your next clue is waiting</div>
           <h1>Explore. Discover. Unlock.</h1>
           <p>
-            Sign in with the username from your invitation and follow the trail,
+            Sign in with the email address from your invitation and follow the trail,
             one clue at a time.
           </p>
           <div className="login-intro__icon" aria-hidden="true">
@@ -49,11 +49,12 @@ export function LoginPage({ onSignedIn }: { onSignedIn: () => void }) {
           <p>Enter the credentials you set from your invitation link.</p>
           <form onSubmit={submit}>
             <Field
-              label="Username"
-              name="username"
-              autoComplete="username"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
+              label="Email address"
+              name="email-address"
+              type="email"
+              autoComplete="email"
+              value={emailAddress}
+              onChange={(event) => setEmailAddress(event.target.value)}
               required
             />
             <Field

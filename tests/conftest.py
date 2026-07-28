@@ -32,9 +32,9 @@ def app(tmp_path):
 @pytest_asyncio.fixture
 async def admin(app):
     user = User(
-        username="admin",
-        normalized_username="admin",
-        display_name="Admin User",
+        email_address="admin@example.com",
+        normalized_email_address="admin@example.com",
+        full_name="Admin User",
         password_hash=hash_password("test-admin-password"),
         is_admin=True,
         last_login_at=datetime.now(UTC),
