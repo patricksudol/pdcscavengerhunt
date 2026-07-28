@@ -50,12 +50,20 @@ def create_app(
             response = json(response)
         response.headers["X-Request-ID"] = request.ctx.request_id
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
+        is_media_frame = (
+            request.method == "GET"
+            and request.path.startswith("/api/v1/media/")
+            and request.path != "/api/v1/media/cloudflare-stream/webhook"
+        )
+        response.headers["X-Frame-Options"] = (
+            "SAMEORIGIN" if is_media_frame else "DENY"
+        )
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         if request.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
         if settings.environment == "production":
+            frame_ancestors = "'self'" if is_media_frame else "'none'"
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains"
             )
@@ -65,8 +73,9 @@ def create_app(
                 "connect-src 'self'; "
                 "font-src 'self' https://fonts.gstatic.com; "
                 "form-action 'self'; "
-                "frame-ancestors 'none'; "
-                "frame-src https://customer-*.cloudflarestream.com; "
+                f"frame-ancestors {frame_ancestors}; "
+                "frame-src 'self' https://*.cloudflarestream.com "
+                "https://*.videodelivery.net; "
                 "img-src 'self' data: https://*.r2.cloudflarestorage.com; "
                 "script-src 'self'; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"

@@ -207,6 +207,7 @@ async def test_admin_uploads_cloudflare_media_and_player_gets_private_redirects(
     )
     assert video_response.status == 302
     assert "cloudflarestream.com" in video_response.headers["location"]
+    assert video_response.headers["x-frame-options"] == "SAMEORIGIN"
 
     async with app.ctx.db.session() as db:
         assert await db.scalar(select(func.count(ClueMedia.id))) == 2

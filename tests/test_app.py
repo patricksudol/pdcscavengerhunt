@@ -31,6 +31,20 @@ async def test_production_responses_include_transport_and_content_security():
     assert settings.public_base_url == "https://hunt.example.org"
     assert response.headers["strict-transport-security"].startswith("max-age=")
     assert "default-src 'self'" in response.headers["content-security-policy"]
+    assert (
+        "frame-src 'self' https://*.cloudflarestream.com "
+        "https://*.videodelivery.net"
+        in response.headers["content-security-policy"]
+    )
+
+    _request, media_response = await app.asgi_client.get(
+        "/api/v1/media/00000000-0000-0000-0000-000000000000"
+    )
+    assert media_response.headers["x-frame-options"] == "SAMEORIGIN"
+    assert (
+        "frame-ancestors 'self'"
+        in media_response.headers["content-security-policy"]
+    )
 
 
 def test_stream_customer_code_is_normalized_to_a_subdomain():
