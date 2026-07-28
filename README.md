@@ -129,7 +129,8 @@ Sign in and open `/admin`.
 
 1. Create player accounts under **Players** and copy each invitation link.
 2. Create a draft game under **Games**.
-3. Add clues and answers. Each code must be unique.
+3. Add clues and answers. Each code must be unique. After saving a clue, reopen
+   it to optionally attach one photo and one video.
 4. Assign active players to the game.
 5. Change the game status to **Open**.
 6. Drag clues by their grip handles to change the order; up/down buttons remain
@@ -141,6 +142,31 @@ Sign in and open `/admin`.
 Invitation links expire after 24 hours, can be used once, and are invalidated
 when a replacement link is generated. No email provider is included; links
 should be sent through a trusted channel.
+
+## Clue photos and videos
+
+Each clue can have at most one photo and one video. Media is shown only when that
+clue is available to the signed-in player. Administrators can upload, replace,
+preview, and remove attachments from the clue editor.
+
+- Photos: JPEG, PNG, or WebP, up to 8 MiB
+- Videos: MP4, up to 100 MiB
+
+Photos are uploaded directly from the administrator's browser to a private
+Cloudflare R2 bucket. Videos upload directly to Cloudflare Stream, which encodes
+them and supplies an adaptive browser player. The Render web service therefore
+does not store or relay the file bodies.
+
+The application keeps media metadata and clue access rules in PostgreSQL. When a
+player reaches a clue, the application redirects the photo to a short-lived
+signed R2 URL or redirects the video player to a short-lived private Stream
+token. Processing videos remain hidden from players until Stream reports that
+they are ready.
+
+The default video duration limit is five minutes in addition to the 100 MiB file
+limit. The size and duration limits can be changed with
+`PDC_PHOTO_MAX_BYTES`, `PDC_VIDEO_MAX_BYTES`, and
+`PDC_VIDEO_MAX_DURATION_SECONDS`.
 
 ## Verification
 
@@ -175,7 +201,7 @@ The checked-in `render.yaml` creates a paid Starter Docker web service and a
 private Basic PostgreSQL 17 database in Virginia. It runs Alembic before each
 deploy, seeds the first administrator after the initial deployment, checks
 database readiness at `/api/ready`, and deploys from `main` only after GitHub CI
-passes.
+passes. No Render disk is needed.
 
 Before the first Blueprint sync, provide these secret values in Render:
 
@@ -184,11 +210,53 @@ Before the first Blueprint sync, provide these secret values in Render:
 - `PDC_SEED_ADMIN_EMAIL`
 - `PDC_SEED_ADMIN_PASSWORD`: at least 12 characters
 - `PDC_SEED_ADMIN_NAME`
+- `PDC_CLOUDFLARE_ACCOUNT_ID`
+- `PDC_CLOUDFLARE_API_TOKEN`: an API token with Stream Read and Stream Write
+- `PDC_CLOUDFLARE_R2_ACCESS_KEY_ID`
+- `PDC_CLOUDFLARE_R2_SECRET_ACCESS_KEY`
+- `PDC_CLOUDFLARE_R2_BUCKET`
+
+The Stream customer subdomain is already set in `render.yaml`.
 
 Render generates separate session-signing and clue-code secrets. Never change
 `PDC_CLUE_CODE_SECRET` after clues have been created: changing it invalidates all
 existing clue codes. Keep the web service and database in the same region so the
 application uses Render's private connection string.
+
+## Cloudflare setup
+
+1. Enable Cloudflare R2 and create a private Standard bucket, for example
+   `pdc-clue-media`.
+2. Create an R2 API token scoped to Object Read & Write for that bucket. Copy its
+   access key ID and secret access key into the corresponding Render variables.
+3. Add this CORS policy to the bucket, replacing the origin with the exact
+   `PDC_PUBLIC_BASE_URL` value:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://your-app.example"],
+    "AllowedMethods": ["PUT"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+4. Add an R2 lifecycle rule that deletes objects under `pending/photos/` after
+   one day. Completed photos are moved to `photos/`; this removes abandoned
+   direct uploads.
+5. Enable Cloudflare Stream and create an API token with Stream Read and Stream
+   Write. Copy the full Stream customer subdomain shown in the Stream dashboard.
+6. Create a Stream webhook targeting
+   `https://your-app.example/api/v1/media/cloudflare-stream/webhook`. Copy its
+   signing secret into a new secret Render environment variable named
+   `PDC_CLOUDFLARE_STREAM_WEBHOOK_SECRET`, then redeploy. This step happens after
+   Render has assigned the service its final hostname.
+
+Keep the R2 bucket private. The browser receives time-limited presigned URLs, not
+the R2 credentials, and Stream videos require signed playback URLs.
 
 Create the GitHub repository, push this project to its `main` branch, connect the
 repository to a new Render Blueprint, and populate the prompted secrets.
@@ -213,6 +281,7 @@ After the first deployment:
 - Sign-in and clue-code submissions are rate limited.
 - Account/password changes invalidate existing sessions.
 - Authentication, administration, rejected codes, and completions are audited.
+- Clue media uploads, replacements, and removals are audited.
 - Authorization and clue ordering are enforced by the API, never by the browser.
 - API responses use `Cache-Control: no-store`; production responses also set
   HSTS and a restrictive Content Security Policy.

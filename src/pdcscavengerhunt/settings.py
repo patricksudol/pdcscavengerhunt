@@ -24,6 +24,19 @@ class Settings(BaseSettings):
     login_rate_limit: int = 5
     code_rate_limit: int = 20
     rate_limit_window_seconds: int = 15 * 60
+    photo_max_bytes: int = 8 * 1024 * 1024
+    video_max_bytes: int = 100 * 1024 * 1024
+    video_max_duration_seconds: int = 5 * 60
+    media_upload_url_ttl_seconds: int = 15 * 60
+    media_read_url_ttl_seconds: int = 5 * 60
+    cloudflare_media_enabled: bool = False
+    cloudflare_account_id: str = ""
+    cloudflare_api_token: str = ""
+    cloudflare_r2_access_key_id: str = ""
+    cloudflare_r2_secret_access_key: str = ""
+    cloudflare_r2_bucket: str = ""
+    cloudflare_stream_customer_subdomain: str = ""
+    cloudflare_stream_webhook_secret: str = ""
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -38,6 +51,14 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_public_base_url(cls, value: str) -> str:
         return value.rstrip("/")
+
+    @field_validator("cloudflare_stream_customer_subdomain")
+    @classmethod
+    def normalize_stream_customer_subdomain(cls, value: str) -> str:
+        normalized = value.removeprefix("https://").removeprefix("http://").rstrip("/")
+        if normalized and "." not in normalized:
+            normalized = f"customer-{normalized}.cloudflarestream.com"
+        return normalized
 
     @model_validator(mode="after")
     def validate_production_settings(self) -> Settings:
@@ -71,6 +92,22 @@ class Settings(BaseSettings):
             errors.append("PDC_SEED_ADMIN_PASSWORD must be at least 12 characters")
         if self.seed_admin_email and not self.seed_admin_name.strip():
             errors.append("PDC_SEED_ADMIN_NAME must not be blank")
+        if self.cloudflare_media_enabled:
+            cloudflare_values = {
+                "PDC_CLOUDFLARE_ACCOUNT_ID": self.cloudflare_account_id,
+                "PDC_CLOUDFLARE_API_TOKEN": self.cloudflare_api_token,
+                "PDC_CLOUDFLARE_R2_ACCESS_KEY_ID": self.cloudflare_r2_access_key_id,
+                "PDC_CLOUDFLARE_R2_SECRET_ACCESS_KEY": (
+                    self.cloudflare_r2_secret_access_key
+                ),
+                "PDC_CLOUDFLARE_R2_BUCKET": self.cloudflare_r2_bucket,
+                "PDC_CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN": (
+                    self.cloudflare_stream_customer_subdomain
+                ),
+            }
+            missing = [name for name, value in cloudflare_values.items() if not value]
+            if missing:
+                errors.append(f"Cloudflare media requires {', '.join(missing)}")
         if errors:
             raise ValueError("; ".join(errors))
         return self
@@ -78,6 +115,10 @@ class Settings(BaseSettings):
     @property
     def sync_database_url(self) -> str:
         return self.database_url.replace("+aiosqlite", "")
+
+    @property
+    def public_hostname(self) -> str:
+        return urlsplit(self.public_base_url).hostname or "localhost"
 
 
 @lru_cache

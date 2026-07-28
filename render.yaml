@@ -24,6 +24,26 @@ services:
         generateValue: true
       - key: PDC_SECURE_COOKIES
         value: "true"
+      - key: PDC_PHOTO_MAX_BYTES
+        value: "8388608"
+      - key: PDC_VIDEO_MAX_BYTES
+        value: "104857600"
+      - key: PDC_VIDEO_MAX_DURATION_SECONDS
+        value: "300"
+      - key: PDC_CLOUDFLARE_MEDIA_ENABLED
+        value: "true"
+      - key: PDC_CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: PDC_CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: PDC_CLOUDFLARE_R2_ACCESS_KEY_ID
+        sync: false
+      - key: PDC_CLOUDFLARE_R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: PDC_CLOUDFLARE_R2_BUCKET
+        sync: false
+      - key: PDC_CLOUDFLARE_STREAM_CUSTOMER_SUBDOMAIN
+        value: fo4vcqkfd42ymmwp
       - key: PDC_SEED_ADMIN_EMAIL
         sync: false
       - key: PDC_SEED_ADMIN_PASSWORD

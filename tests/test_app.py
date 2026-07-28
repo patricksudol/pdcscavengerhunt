@@ -31,3 +31,13 @@ async def test_production_responses_include_transport_and_content_security():
     assert settings.public_base_url == "https://hunt.example.org"
     assert response.headers["strict-transport-security"].startswith("max-age=")
     assert "default-src 'self'" in response.headers["content-security-policy"]
+
+
+def test_stream_customer_code_is_normalized_to_a_subdomain():
+    settings = Settings(
+        cloudflare_stream_customer_subdomain="fo4vcqkfd42ymmwp",
+    )
+
+    assert settings.cloudflare_stream_customer_subdomain == (
+        "customer-fo4vcqkfd42ymmwp.cloudflarestream.com"
+    )

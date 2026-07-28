@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CurrentClueCard } from "./PlayerPage";
+import { ClueMediaAttachments, CurrentClueCard } from "./PlayerPage";
 
 describe("current clue card", () => {
   it("presents the active clue as the primary action area", () => {
@@ -35,5 +35,39 @@ describe("current clue card", () => {
       target: { value: "CLOCK" },
     });
     expect(onCodeChange).toHaveBeenCalledWith("CLOCK");
+  });
+});
+
+describe("clue media attachments", () => {
+  it("renders a playable photo and video", () => {
+    render(
+      <ClueMediaAttachments
+        clueTitle="Town clock"
+        photo={{
+          id: "photo-1",
+          media_type: "photo",
+          content_type: "image/webp",
+          size_bytes: 2048,
+          status: "ready",
+          url: "/api/v1/media/photo-1",
+        }}
+        video={{
+          id: "video-1",
+          media_type: "video",
+          content_type: "video/mp4",
+          size_bytes: 4096,
+          status: "ready",
+          url: "/api/v1/media/video-1",
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("img", { name: "Photo for Town clock" })).toHaveAttribute(
+      "src",
+      "/api/v1/media/photo-1",
+    );
+    expect(
+      screen.getByLabelText("Video for Town clock"),
+    ).toHaveAttribute("src", "/api/v1/media/video-1");
   });
 });

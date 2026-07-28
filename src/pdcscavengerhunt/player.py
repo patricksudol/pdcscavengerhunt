@@ -11,9 +11,11 @@ from .models import (
     AuditEvent,
     Clue,
     ClueCompletion,
+    ClueMedia,
     Game,
     GamePlayer,
     GameStatus,
+    MediaType,
 )
 from .schemas import CodeSubmission
 from .security import (
@@ -54,6 +56,32 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
         ).all()
     )
     completion_map = {completion.clue_id: completion for completion in completions}
+    media_items = list(
+        (
+            await db.scalars(
+                select(ClueMedia).where(
+                    ClueMedia.clue_id.in_([clue.id for clue in clues])
+                )
+            )
+        ).all()
+    )
+    media_by_clue: dict[UUID, dict[MediaType, ClueMedia]] = {}
+    for media in media_items:
+        media_by_clue.setdefault(media.clue_id, {})[media.media_type] = media
+
+    def media_for(clue: Clue, media_type: MediaType) -> dict | None:
+        media = media_by_clue.get(clue.id, {}).get(media_type)
+        if not media or media.status != "ready":
+            return None
+        return {
+            "id": str(media.id),
+            "media_type": media.media_type.value,
+            "content_type": media.content_type,
+            "size_bytes": media.size_bytes,
+            "status": media.status,
+            "url": f"/api/v1/media/{media.id}",
+        }
+
     first_incomplete = next(
         (index for index, clue in enumerate(clues) if clue.id not in completion_map),
         len(clues),
@@ -71,6 +99,8 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
                     "clue": clue.title,
                     "answer": clue.content,
                     "completed_at": completion.completed_at.isoformat(),
+                    "photo": media_for(clue, MediaType.photo),
+                    "video": media_for(clue, MediaType.video),
                 }
             )
         elif index == first_incomplete:
@@ -80,6 +110,8 @@ async def game_state(db, game: Game, membership: GamePlayer) -> dict:
                     "position": clue.position,
                     "status": "current",
                     "clue": clue.title,
+                    "photo": media_for(clue, MediaType.photo),
+                    "video": media_for(clue, MediaType.video),
                 }
             )
         else:

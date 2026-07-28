@@ -27,6 +27,7 @@ import {
   Clipboard,
   Gamepad2,
   GripVertical,
+  Image as ImageIcon,
   KeyRound,
   ListChecks,
   LockKeyhole,
@@ -37,8 +38,10 @@ import {
   Plus,
   Shield,
   Trash2,
+  Upload,
   UserCog,
   Users,
+  Video,
   X,
 } from "lucide-react";
 
@@ -49,6 +52,7 @@ import {
   AdminUser,
   AuditEvent,
   AuditEventPage,
+  ClueMedia,
   api,
   formatDate,
   Me,
@@ -242,6 +246,12 @@ const auditActionLabels: Record<string, string> = {
   "clue.updated": "Updated a clue",
   "clues.reordered": "Reordered clues",
   "clue.deleted": "Deleted a clue",
+  "clue.media_attached": "Attached clue media",
+  "clue.media_upload_started": "Started a clue media upload",
+  "clue.media_replaced": "Replaced clue media",
+  "clue.media_removed": "Removed clue media",
+  "clue.media_ready": "Finished processing clue media",
+  "clue.media_error": "Failed to process clue media",
   "player.progress_reset": "Reset player progress",
 };
 
@@ -550,6 +560,12 @@ function SortableClueRow({
           <button className="clue-admin-set-code" type="button" onClick={onEdit}>
             <KeyRound /> Set code
           </button>
+        )}
+        {(clue.photo || clue.video) && (
+          <div className="clue-admin-media">
+            {clue.photo && <span><ImageIcon /> Photo</span>}
+            {clue.video && <span><Video /> Video</span>}
+          </div>
         )}
       </div>
       <span className="clue-admin-actions">
@@ -912,7 +928,176 @@ function MembershipEditor({ game, users }: { game: AdminGameDetail; users: Admin
   );
 }
 
+function formatFileSize(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
+
+function MediaAttachmentEditor({
+  clue,
+  onChanged,
+}: {
+  clue: AdminClue;
+  onChanged: () => void;
+}) {
+  const [photo, setPhoto] = useState<ClueMedia | null>(clue.photo);
+  const [video, setVideo] = useState<ClueMedia | null>(clue.video);
+  const [selectionError, setSelectionError] = useState<Error | null>(null);
+  const upload = useMutation({
+    mutationFn: async ({
+      mediaType,
+      file,
+    }: {
+      mediaType: "photo" | "video";
+      file: File;
+    }) => {
+      const path = `/api/v1/admin/clues/${clue.id}/media/${mediaType}`;
+      const uploadDetails = await postJson<{
+        upload_url: string;
+        upload_method: "PUT" | "POST";
+        upload_token: string;
+      }>(`${path}/upload`, {
+        original_filename: file.name,
+        content_type: file.type,
+        size_bytes: file.size,
+      });
+      const body: BodyInit =
+        uploadDetails.upload_method === "PUT"
+          ? file
+          : (() => {
+              const form = new FormData();
+              form.append("file", file);
+              return form;
+            })();
+      const response = await fetch(uploadDetails.upload_url, {
+        method: uploadDetails.upload_method,
+        body,
+        headers:
+          uploadDetails.upload_method === "PUT"
+            ? { "Content-Type": file.type }
+            : undefined,
+      });
+      if (!response.ok) {
+        throw new Error("Cloudflare could not receive this media file");
+      }
+      return postJson<ClueMedia>(`${path}/complete`, {
+        upload_token: uploadDetails.upload_token,
+      });
+    },
+    onSuccess: (media) => {
+      if (media.media_type === "photo") setPhoto(media);
+      else setVideo(media);
+      onChanged();
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (mediaType: "photo" | "video") =>
+      api(`/api/v1/admin/clues/${clue.id}/media/${mediaType}`, {
+        method: "DELETE",
+      }),
+    onSuccess: (_result, mediaType) => {
+      if (mediaType === "photo") setPhoto(null);
+      else setVideo(null);
+      onChanged();
+    },
+  });
+
+  function chooseMedia(mediaType: "photo" | "video", file?: File) {
+    if (!file) return;
+    const maxBytes = mediaType === "photo" ? 8 * 1024 * 1024 : 100 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setSelectionError(
+        new Error(
+          `${mediaType === "photo" ? "Photos" : "Videos"} cannot exceed ${
+            mediaType === "photo" ? 8 : 100
+          } MiB`,
+        ),
+      );
+      return;
+    }
+    setSelectionError(null);
+    upload.mutate({ mediaType, file });
+  }
+
+  function removeMedia(mediaType: "photo" | "video") {
+    if (window.confirm(`Remove this clue's ${mediaType}?`)) {
+      remove.mutate(mediaType);
+    }
+  }
+
+  return (
+    <section className="media-editor">
+      <div>
+        <strong>Photo</strong>
+        <small>JPEG, PNG, or WebP · maximum 8 MiB</small>
+        {photo && (
+          <div className="media-editor__preview">
+            <img src={photo.url} alt="" />
+            <span>{photo.original_filename} · {formatFileSize(photo.size_bytes)}</span>
+          </div>
+        )}
+        <div className="media-editor__actions">
+          <label className="button button--secondary media-upload-button">
+            <Upload /> {photo ? "Replace photo" : "Upload photo"}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              disabled={upload.isPending}
+              onChange={(event) => {
+                chooseMedia("photo", event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {photo && <Button type="button" variant="danger" busy={remove.isPending} onClick={() => removeMedia("photo")}>Remove</Button>}
+        </div>
+      </div>
+      <div>
+        <strong>Video</strong>
+        <small>Web-compatible MP4 · maximum 100 MiB</small>
+        {video && (
+          <div className="media-editor__preview">
+            {video.status === "ready" ? (
+              <iframe
+                src={video.url}
+                title={`Preview of ${video.original_filename ?? "clue video"}`}
+                allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
+            ) : (
+              <p>
+                {video.status === "error"
+                  ? "Cloudflare could not process this video."
+                  : "Cloudflare is processing this video. It will appear for players when ready."}
+              </p>
+            )}
+            <span>{video.original_filename} · {formatFileSize(video.size_bytes)}</span>
+          </div>
+        )}
+        <div className="media-editor__actions">
+          <label className="button button--secondary media-upload-button">
+            <Upload /> {video ? "Replace video" : "Upload video"}
+            <input
+              type="file"
+              accept="video/mp4"
+              disabled={upload.isPending}
+              onChange={(event) => {
+                chooseMedia("video", event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {video && <Button type="button" variant="danger" busy={remove.isPending} onClick={() => removeMedia("video")}>Remove</Button>}
+        </div>
+      </div>
+      {upload.isPending && <p className="media-editor__status">Uploading media… Keep this window open.</p>}
+      <ErrorMessage error={selectionError || upload.error || remove.error} />
+    </section>
+  );
+}
+
 function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: AdminClue | null; onClose: () => void; onSaved: () => void }) {
+  const queryClient = useQueryClient();
   const [title, setTitle] = useState(clue?.title ?? "");
   const [content, setContent] = useState(clue?.content ?? "");
   const [code, setCode] = useState(clue?.code ?? "");
@@ -946,6 +1131,18 @@ function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: 
                 : "Codes are case-insensitive and cannot be reused."
           }
         />
+        {clue ? (
+          <MediaAttachmentEditor
+            clue={clue}
+            onChanged={() =>
+              queryClient.invalidateQueries({ queryKey: ["admin-game", gameId] })
+            }
+          />
+        ) : (
+          <p className="media-editor__new-note">
+            Save this clue, then reopen it to attach a photo or video.
+          </p>
+        )}
         <ErrorMessage error={save.error} />
         <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={save.isPending} type="submit">Save clue</Button></div>
       </form>

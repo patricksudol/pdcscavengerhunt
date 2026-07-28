@@ -12,7 +12,9 @@ from sqlalchemy import text
 
 from .admin import admin_bp
 from .auth import auth_bp
+from .cloudflare_media import CloudflareMediaProvider
 from .db import Database
+from .media import media_bp
 from .player import player_bp
 from .settings import Settings, get_settings
 
@@ -25,10 +27,12 @@ def create_app(
     app.config.FALLBACK_ERROR_FORMAT = "json"
     app.ctx.settings = settings
     app.ctx.db = Database(settings.database_url)
+    app.ctx.media = CloudflareMediaProvider(settings)
     app.ctx.rate_limits = defaultdict(deque)
     app.blueprint(auth_bp)
     app.blueprint(player_bp)
     app.blueprint(admin_bp)
+    app.blueprint(media_bp)
 
     @app.middleware("request")
     async def request_context(request: Request) -> None:
@@ -59,7 +63,8 @@ def create_app(
                 "font-src 'self' https://fonts.gstatic.com; "
                 "form-action 'self'; "
                 "frame-ancestors 'none'; "
-                "img-src 'self' data:; "
+                "frame-src https://customer-*.cloudflarestream.com; "
+                "img-src 'self' data: https://*.r2.cloudflarestorage.com; "
                 "script-src 'self'; "
                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com"
             )

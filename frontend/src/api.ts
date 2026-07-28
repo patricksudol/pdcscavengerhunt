@@ -24,6 +24,8 @@ export interface PlayerClue {
   clue?: string;
   answer?: string;
   completed_at?: string;
+  photo?: ClueMedia | null;
+  video?: ClueMedia | null;
 }
 
 export interface PlayerGameDetail extends PlayerGame {
@@ -94,6 +96,19 @@ export interface AdminClue {
   content: string;
   code: string | null;
   code_set: boolean;
+  photo: ClueMedia | null;
+  video: ClueMedia | null;
+}
+
+export interface ClueMedia {
+  id: string;
+  media_type: "photo" | "video";
+  original_filename?: string;
+  content_type: string;
+  size_bytes: number;
+  status: "processing" | "ready" | "error";
+  url: string;
+  created_at?: string;
 }
 
 export interface AdminGameDetail extends AdminGame {
@@ -132,7 +147,9 @@ export function setCsrfToken(value: string | null): void {
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const method = (options.method ?? "GET").toUpperCase();
   const headers = new Headers(options.headers);
-  if (options.body) headers.set("Content-Type", "application/json");
+  if (options.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
   if (!["GET", "HEAD", "OPTIONS"].includes(method) && csrfToken) {
     headers.set("X-CSRF-Token", csrfToken);
   }

@@ -17,6 +17,7 @@ import {
 
 import {
   api,
+  ClueMedia,
   Me,
   PlayerClue,
   PlayerGame,
@@ -27,6 +28,38 @@ import {
 import { Brand, Button, EmptyState, ErrorMessage, StatusBadge } from "./components";
 
 const confettiColors = ["#8cd624", "#2395d3", "#f6be00", "#6738a7", "#ef476f", "#ffffff"];
+
+export function ClueMediaAttachments({
+  photo,
+  video,
+  clueTitle,
+}: {
+  photo?: ClueMedia | null;
+  video?: ClueMedia | null;
+  clueTitle?: string;
+}) {
+  if (!photo && !video) return null;
+  return (
+    <div className="clue-media">
+      {photo && (
+        <img
+          src={photo.url}
+          alt={clueTitle ? `Photo for ${clueTitle}` : "Clue photo"}
+          loading="lazy"
+        />
+      )}
+      {video && (
+        <iframe
+          src={video.url}
+          title={clueTitle ? `Video for ${clueTitle}` : "Clue video"}
+          aria-label={clueTitle ? `Video for ${clueTitle}` : "Clue video"}
+          allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture"
+          allowFullScreen
+        />
+      )}
+    </div>
+  );
+}
 
 export function CurrentClueCard({
   current,
@@ -56,6 +89,11 @@ export function CurrentClueCard({
         <span className="unlock-card__icon" aria-hidden="true"><KeyRound /></span>
         <div className="eyebrow">Your next challenge</div>
         <h2 className="unlock-card__clue" id={headingId}>{current.clue}</h2>
+        <ClueMediaAttachments
+          photo={current.photo}
+          video={current.video}
+          clueTitle={current.clue}
+        />
         <p>Solve this clue, then enter the code you find to reveal the answer.</p>
         <form onSubmit={onSubmit}>
           <input
@@ -278,6 +316,11 @@ function GameView({ me, gameId }: { me: Me; gameId: string }) {
                 <div className="reveal-card__body">
                   <div className="eyebrow">Clue {latestCompleted.position}</div>
                   <h2>{latestCompleted.clue}</h2>
+                  <ClueMediaAttachments
+                    photo={latestCompleted.photo}
+                    video={latestCompleted.video}
+                    clueTitle={latestCompleted.clue}
+                  />
                   <div className="reveal-card__answer">
                     <div className="eyebrow">Answer</div>
                     <p>{latestCompleted.answer}</p>
@@ -330,6 +373,11 @@ function GameView({ me, gameId }: { me: Me; gameId: string }) {
                   <div>
                     <span className="clue-row__label">Clue {clue.position}</span>
                     <h3>{clue.clue}</h3>
+                    <ClueMediaAttachments
+                      photo={clue.photo}
+                      video={clue.video}
+                      clueTitle={clue.clue}
+                    />
                     <strong className="clue-row__answer-label">Answer</strong>
                     <p>{clue.answer}</p>
                     <small><CheckCircle2 /> Unlocked</small>

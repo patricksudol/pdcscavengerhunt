@@ -28,6 +28,8 @@ describe("admin player progress", () => {
           content: "At the corner of...",
           code: "MURAL",
           code_set: true,
+          photo: null,
+          video: null,
         },
       ],
       players: [
@@ -111,6 +113,8 @@ describe("admin player progress", () => {
           content: "The finish",
           code: "FINISH",
           code_set: true,
+          photo: null,
+          video: null,
         },
       ],
       players: [1, 2, 3, 4].map((rank) => ({

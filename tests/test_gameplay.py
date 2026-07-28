@@ -74,6 +74,8 @@ async def test_game_state_exposes_current_clue_but_not_its_answer(app, admin):
             "position": 1,
             "status": "current",
             "clue": "First Reveal",
+            "photo": None,
+            "video": None,
         },
         {"position": 2, "status": "locked"},
     ]

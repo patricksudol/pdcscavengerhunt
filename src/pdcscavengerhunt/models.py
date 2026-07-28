@@ -35,6 +35,11 @@ class GameStatus(enum.StrEnum):
     closed = "closed"
 
 
+class MediaType(enum.StrEnum):
+    photo = "photo"
+    video = "video"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -158,6 +163,40 @@ class Clue(Base):
     completions: Mapped[list[ClueCompletion]] = relationship(
         back_populates="clue", cascade="all, delete-orphan"
     )
+    media: Mapped[list[ClueMedia]] = relationship(
+        back_populates="clue", cascade="all, delete-orphan"
+    )
+
+
+class ClueMedia(Base):
+    __tablename__ = "clue_media"
+    __table_args__ = (
+        UniqueConstraint("clue_id", "media_type", name="uq_clue_media_clue_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    clue_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clues.id", ondelete="CASCADE"), index=True
+    )
+    media_type: Mapped[MediaType] = mapped_column(
+        Enum(MediaType, native_enum=False), index=True
+    )
+    provider_key: Mapped[str] = mapped_column(String(255), unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(80))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(
+        String(20), default="ready", server_default="ready", index=True
+    )
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    clue: Mapped[Clue] = relationship(back_populates="media")
 
 
 class ClueCompletion(Base):
