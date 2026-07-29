@@ -437,6 +437,69 @@ async def update_user(request: Request, user_id: UUID):
         return after
 
 
+@admin_bp.delete("/users/<user_id:uuid>")
+@login_required(admin=True)
+async def delete_user(request: Request, user_id: UUID):
+    async with request.app.ctx.db.session() as db:
+        user = await db.get(User, user_id)
+        if not user:
+            raise NotFound("User not found")
+        if user.id == request.ctx.user.id:
+            raise InvalidUsage("You cannot delete your own account")
+
+        before = user_json(user)
+        db.add(
+            audit(
+                request,
+                action="user.deleted",
+                entity_type="user",
+                entity_id=str(user.id),
+                before=before,
+            )
+        )
+
+        # Keep historical records, but remove the account's credentials,
+        # assignments, and progress. These statements also make deletion
+        # consistent in SQLite environments where FK cascades may be disabled.
+        await db.execute(
+            update(PasswordSetupToken)
+            .where(PasswordSetupToken.created_by_id == user.id)
+            .values(created_by_id=None)
+        )
+        await db.execute(
+            delete(PasswordSetupToken).where(PasswordSetupToken.user_id == user.id)
+        )
+        membership_ids = select(GamePlayer.id).where(GamePlayer.user_id == user.id)
+        await db.execute(
+            delete(ClueCompletion).where(
+                ClueCompletion.game_player_id.in_(membership_ids)
+            )
+        )
+        await db.execute(delete(GamePlayer).where(GamePlayer.user_id == user.id))
+        await db.execute(
+            update(GamePlayer)
+            .where(GamePlayer.assigned_by_id == user.id)
+            .values(assigned_by_id=None)
+        )
+        await db.execute(
+            update(Game)
+            .where(Game.created_by_id == user.id)
+            .values(created_by_id=None)
+        )
+        await db.execute(
+            update(ClueMedia)
+            .where(ClueMedia.created_by_id == user.id)
+            .values(created_by_id=None)
+        )
+        await db.execute(
+            update(AuditEvent)
+            .where(AuditEvent.actor_id == user.id)
+            .values(actor_id=None)
+        )
+        await db.execute(delete(User).where(User.id == user.id))
+        return {"deleted": True}
+
+
 @admin_bp.post("/users/<user_id:uuid>/setup-link")
 @login_required(admin=True)
 async def regenerate_setup_link(request: Request, user_id: UUID):

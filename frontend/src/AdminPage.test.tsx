@@ -1,11 +1,80 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AuditTable, ProgressEditor } from "./AdminPage";
-import type { AdminGameDetail, AuditEvent } from "./api";
+import { AuditTable, Players, ProgressEditor } from "./AdminPage";
+import type { AdminGameDetail, AdminUser, AuditEvent, Me } from "./api";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+function jsonResponse(body: unknown) {
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers({ "content-type": "application/json" }),
+    json: async () => body,
+  } as Response;
+}
+
+describe("admin player accounts", () => {
+  it("confirms and permanently deletes another user", async () => {
+    const me: Me = {
+      id: "admin-1",
+      email_address: "admin@example.com",
+      full_name: "Admin User",
+      is_admin: true,
+      csrf_token: "csrf",
+    };
+    const users: AdminUser[] = [
+      {
+        id: "player-1",
+        email_address: "player@example.com",
+        full_name: "Player One",
+        is_admin: false,
+        active: true,
+        password_set: true,
+        game_count: 2,
+        created_at: "2026-07-28T12:00:00+00:00",
+        last_login_at: null,
+      },
+    ];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path === "/api/v1/admin/users" && (!init?.method || init.method === "GET")) {
+        return jsonResponse(users);
+      }
+      if (path === "/api/v1/admin/audit-events?limit=50&offset=0") {
+        return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
+      }
+      if (path === "/api/v1/admin/users/player-1" && init?.method === "DELETE") {
+        return jsonResponse({ deleted: true });
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Players me={me} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /delete/i }));
+
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining("cannot be undone"));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/admin/users/player-1",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+  });
+});
 
 describe("admin player progress", () => {
   it("lets an admin advance an incomplete player to a later clue", () => {

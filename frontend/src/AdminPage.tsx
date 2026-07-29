@@ -82,7 +82,7 @@ export function AdminPage({ me }: { me: Me }) {
     },
   });
   const page =
-    path === "/admin/players" ? <Players /> :
+    path === "/admin/players" ? <Players me={me} /> :
     path === "/admin/games" ? <Games /> :
     path === "/admin/security" ? <Security /> :
     <Overview />;
@@ -162,7 +162,7 @@ function Stat({ icon, value, label, color }: { icon: React.ReactNode; value: num
   return <div className={`stat stat--${color}`}><span className="stat__icon">{icon}</span><span><strong>{value}</strong><small>{label}</small></span></div>;
 }
 
-function Players() {
+export function Players({ me }: { me: Me }) {
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
@@ -186,6 +186,24 @@ function Players() {
       queryClient.invalidateQueries({ queryKey: ["admin-audit-events"] });
     },
   });
+  const remove = useMutation({
+    mutationFn: (id: string) =>
+      api<{ deleted: boolean }>(`/api/v1/admin/users/${id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-audit-events"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-dashboard"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-games"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-game"] });
+    },
+  });
+  function confirmDelete(user: AdminUser) {
+    if (window.confirm(
+      `Permanently delete ${user.full_name}? Their game assignments, password invitations, and clue progress will also be deleted. This cannot be undone.`,
+    )) {
+      remove.mutate(user.id);
+    }
+  }
   return (
     <>
       <PageTitle eyebrow="People & access" title="Players">
@@ -193,7 +211,7 @@ function Players() {
       </PageTitle>
       <p className="page-lede">Provision player accounts, manage administrator access, and issue password invitations.</p>
       <section className="panel">
-        <ErrorMessage error={update.error || invite.error} />
+        <ErrorMessage error={update.error || invite.error || remove.error} />
         {users.isLoading ? <div className="panel-loading">Loading players…</div> :
           users.isError ? <ErrorMessage error={users.error} /> :
           !users.data?.length ? <EmptyState icon={<Users />} title="No players">Create the first player to begin.</EmptyState> :
@@ -214,6 +232,15 @@ function Players() {
                   <Button variant="quiet" onClick={() => setEditing(user)}>Edit</Button>
                   <Button variant="secondary" onClick={() => invite.mutate(user.id)}>{user.password_set ? "New link" : "Invite"}</Button>
                   <Button variant="quiet" onClick={() => update.mutate({ id: user.id, changes: { active: !user.active } })}>{user.active ? "Deactivate" : "Activate"}</Button>
+                  {user.id !== me.id && (
+                    <Button
+                      variant="danger"
+                      busy={remove.isPending && remove.variables === user.id}
+                      onClick={() => confirmDelete(user)}
+                    >
+                      <Trash2 /> Delete
+                    </Button>
+                  )}
                 </span>
               </div>
             ))}
@@ -239,6 +266,7 @@ const auditActionLabels: Record<string, string> = {
   "user.created": "Created a player",
   "user.seeded": "Created the initial administrator",
   "user.updated": "Updated a player",
+  "user.deleted": "Deleted a player",
   "user.setup_link_generated": "Issued a password invitation",
   "game.created": "Created a game",
   "game.updated": "Updated a game",
@@ -284,6 +312,9 @@ function auditSummary(event: AuditEvent) {
   if (event.action === "user.updated") {
     const fields = changedFields(event);
     return fields.length ? `Changed ${fields.map(humanize).join(", ")}` : "Player record saved";
+  }
+  if (event.action === "user.deleted" && typeof event.before?.email_address === "string") {
+    return event.before.email_address;
   }
   if (event.action === "game.players_updated" && Array.isArray(after?.user_ids)) {
     return `${after.user_ids.length} player${after.user_ids.length === 1 ? "" : "s"} assigned`;

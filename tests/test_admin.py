@@ -11,6 +11,7 @@ from pdcscavengerhunt.models import (
     ClueCompletion,
     Game,
     GamePlayer,
+    PasswordSetupToken,
     User,
 )
 from pdcscavengerhunt.security import fingerprint_code
@@ -135,6 +136,84 @@ async def test_admin_cannot_remove_own_admin_access(app, admin):
             headers=headers,
         )
         assert response.status == 400
+
+
+async def test_admin_can_permanently_delete_user_and_their_progress(app, admin):
+    async with app.ctx.db.session() as db:
+        player = User(
+            email_address="delete-me@example.com",
+            normalized_email_address="delete-me@example.com",
+            full_name="Delete Me",
+            password_hash="not-a-real-hash",
+        )
+        game = Game(title="Deletion Game", status="open", created_by_id=admin.id)
+        db.add_all([player, game])
+        await db.flush()
+        membership = GamePlayer(
+            game_id=game.id,
+            user_id=player.id,
+            assigned_by_id=admin.id,
+        )
+        clue = Clue(
+            game_id=game.id,
+            position=1,
+            title="Deletion Clue",
+            content="Deletion content",
+            code_fingerprint=fingerprint_code("DELETE-ME", app.ctx.settings),
+        )
+        db.add_all([membership, clue])
+        await db.flush()
+        completion = ClueCompletion(
+            game_player_id=membership.id,
+            clue_id=clue.id,
+        )
+        token = PasswordSetupToken(
+            user_id=player.id,
+            token_hash="delete-user-token",
+            created_by_id=admin.id,
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        db.add_all([completion, token])
+        await db.flush()
+        player_id = player.id
+        membership_id = membership.id
+        completion_id = completion.id
+        token_id = token.id
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.delete(
+        f"/api/v1/admin/users/{player_id}",
+        cookies=cookies,
+        headers=headers,
+    )
+
+    assert response.status == 200
+    assert response.json == {"deleted": True}
+    async with app.ctx.db.session() as db:
+        assert await db.get(User, player_id) is None
+        assert await db.get(GamePlayer, membership_id) is None
+        assert await db.get(ClueCompletion, completion_id) is None
+        assert await db.get(PasswordSetupToken, token_id) is None
+        event = await db.scalar(
+            select(AuditEvent).where(AuditEvent.action == "user.deleted")
+        )
+        assert event
+        assert event.actor_id == admin.id
+        assert event.entity_id == str(player_id)
+        assert event.before["email_address"] == "delete-me@example.com"
+
+
+async def test_admin_cannot_delete_own_account(app, admin):
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.delete(
+        f"/api/v1/admin/users/{admin.id}",
+        cookies=cookies,
+        headers=headers,
+    )
+
+    assert response.status == 400
+    async with app.ctx.db.session() as db:
+        assert await db.get(User, admin.id)
 
 
 async def test_admin_game_detail_includes_clue_completion_timestamps(app, admin):
