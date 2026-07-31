@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from sanic import Blueprint, Request
 from sanic.exceptions import InvalidUsage, NotFound, SanicException
 from sanic.log import logger
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 
 from .auth import setup_token_hash
 from .cloudflare_media import MediaProviderError
@@ -351,17 +351,61 @@ async def list_audit_events(request: Request):
         raise InvalidUsage("Audit limit must be between 1 and 100")
     if offset < 0:
         raise InvalidUsage("Audit offset cannot be negative")
+    game_id = None
+    if supplied_game_id := request.args.get("game_id"):
+        try:
+            game_id = UUID(supplied_game_id)
+        except ValueError as error:
+            raise InvalidUsage("Audit game ID must be a UUID") from error
 
     async with request.app.ctx.db.session() as db:
-        total = await db.scalar(select(func.count(AuditEvent.id))) or 0
-        rows = (
-            await db.execute(
-                select(AuditEvent, User)
-                .outerjoin(User, User.id == AuditEvent.actor_id)
-                .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
-                .offset(offset)
-                .limit(limit)
+        game_filter = None
+        if game_id:
+            clue_ids = [
+                str(clue_id)
+                for clue_id in (
+                    await db.scalars(select(Clue.id).where(Clue.game_id == game_id))
+                ).all()
+            ]
+            hint_ids = [
+                str(hint_id)
+                for hint_id in (
+                    await db.scalars(
+                        select(Hint.id)
+                        .join(Clue, Clue.id == Hint.clue_id)
+                        .where(Clue.game_id == game_id)
+                    )
+                ).all()
+            ]
+            game_id_text = str(game_id)
+            game_filter = or_(
+                (AuditEvent.entity_type == "game")
+                & (AuditEvent.entity_id == game_id_text),
+                AuditEvent.after["game_id"].as_string() == game_id_text,
+                AuditEvent.before["game_id"].as_string() == game_id_text,
+                (AuditEvent.entity_type == "clue")
+                & AuditEvent.entity_id.in_(clue_ids),
+                (AuditEvent.entity_type == "hint")
+                & AuditEvent.entity_id.in_(hint_ids),
+                AuditEvent.after["clue_id"].as_string().in_(clue_ids),
+                AuditEvent.before["clue_id"].as_string().in_(clue_ids),
             )
+
+        count_query = select(func.count(AuditEvent.id))
+        if game_filter is not None:
+            count_query = count_query.where(game_filter)
+        total = await db.scalar(count_query) or 0
+        events_query = (
+            select(AuditEvent, User)
+            .outerjoin(User, User.id == AuditEvent.actor_id)
+            .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        if game_filter is not None:
+            events_query = events_query.where(game_filter)
+        rows = (
+            await db.execute(events_query)
         ).all()
         subject_ids = {
             subject_id

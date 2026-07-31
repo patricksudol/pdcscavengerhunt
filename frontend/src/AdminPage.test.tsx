@@ -2,7 +2,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AuditTable, HintsEditor, Players, ProgressEditor } from "./AdminPage";
+import {
+  AuditTable,
+  GameEditor,
+  HintsEditor,
+  Players,
+  ProgressEditor,
+} from "./AdminPage";
 import type {
   AdminClue,
   AdminGameDetail,
@@ -321,6 +327,157 @@ describe("admin clue hints", () => {
     ).toHaveClass("clue-drag-handle");
     expect(screen.getByRole("button", { name: "Move hint 1 up" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Move hint 1 down" })).toBeEnabled();
+  });
+
+  it("lets an admin choose hint media before creating the hint", async () => {
+    const clue: AdminClue = {
+      id: "clue-new-hint",
+      position: 1,
+      title: "Find the clock",
+      content: "At the clock",
+      code: "CLOCK",
+      code_set: true,
+      photo: null,
+      video: null,
+      hints: [],
+    };
+    const createdHint = {
+      id: "hint-new",
+      position: 1,
+      text: "Look above the door.",
+      photo: null,
+      video: null,
+    };
+    const uploadedPhoto = {
+      id: "media-new",
+      media_type: "photo" as const,
+      original_filename: "door.png",
+      content_type: "image/png",
+      size_bytes: 12,
+      status: "ready" as const,
+      url: "/api/v1/media/media-new",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input, init) => {
+        const path = String(input);
+        if (
+          path === "/api/v1/admin/clues/clue-new-hint/hints"
+          && init?.method === "POST"
+        ) {
+          return jsonResponse(createdHint);
+        }
+        if (
+          path === "/api/v1/admin/hints/hint-new/media/photo"
+          && init?.method === "PUT"
+        ) {
+          return jsonResponse(uploadedPhoto);
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      },
+    );
+    const onChanged = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HintsEditor clue={clue} onChanged={onChanged} />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add hint" }));
+    const photo = new File(["photo bytes"], "door.png", { type: "image/png" });
+    fireEvent.change(screen.getByLabelText("Hint photo"), {
+      target: { files: [photo] },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /^Hint text/ }), {
+      target: { value: "Look above the door." },
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/Ready to upload: door.png/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Create hint" }));
+
+    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      text: "Look above the door.",
+    });
+    expect(fetchMock.mock.calls[1][1]?.body).toBe(photo);
+    expect(screen.getByText("Look above the door.")).toBeInTheDocument();
+  });
+});
+
+describe("admin game audit history", () => {
+  it("adds a game-filtered audit tab after progress", async () => {
+    const game: AdminGameDetail = {
+      id: "game-audit",
+      title: "Audited Hunt",
+      description: null,
+      instructions: null,
+      closing_message: null,
+      status: "open",
+      player_count: 0,
+      clue_count: 0,
+      completion_count: 0,
+      created_at: "2026-07-28T12:00:00+00:00",
+      updated_at: "2026-07-28T12:00:00+00:00",
+      clues: [],
+      players: [],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input) => {
+        const path = String(input);
+        if (path === "/api/v1/admin/games/game-audit") {
+          return jsonResponse(game);
+        }
+        if (path === "/api/v1/admin/users") {
+          return jsonResponse([]);
+        }
+        if (
+          path
+          === "/api/v1/admin/audit-events?limit=50&offset=0&game_id=game-audit"
+        ) {
+          return jsonResponse({
+            items: [],
+            total: 0,
+            limit: 50,
+            offset: 0,
+          });
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      },
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <GameEditor gameId={game.id} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    const auditTab = await screen.findByRole("button", {
+      name: "Audit history",
+    });
+    const tabs = screen.getAllByRole("navigation")[0].querySelectorAll("button");
+    expect(Array.from(tabs).map((tab) => tab.textContent)).toEqual([
+      "Clues",
+      "Players",
+      "Progress",
+      "Audit history",
+    ]);
+
+    fireEvent.click(auditTab);
+
+    expect(
+      await screen.findByRole("heading", { name: "Game audit history" }),
+    ).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/admin/audit-events?limit=50&offset=0&game_id=game-audit",
+      expect.any(Object),
+    );
   });
 });
 

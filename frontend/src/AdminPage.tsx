@@ -385,19 +385,32 @@ export function AuditTable({ events }: { events: AuditEvent[] }) {
   );
 }
 
-function AuditLog() {
+function AuditLog({ gameId }: { gameId?: string }) {
   const pageSize = 50;
   const [offset, setOffset] = useState(0);
   const events = useQuery({
-    queryKey: ["admin-audit-events", offset],
-    queryFn: () => api<AuditEventPage>(`/api/v1/admin/audit-events?limit=${pageSize}&offset=${offset}`),
+    queryKey: ["admin-audit-events", gameId ?? "all", offset],
+    queryFn: () =>
+      api<AuditEventPage>(
+        `/api/v1/admin/audit-events?limit=${pageSize}&offset=${offset}${
+          gameId ? `&game_id=${gameId}` : ""
+        }`,
+      ),
   });
   const page = Math.floor(offset / pageSize) + 1;
   const pageCount = Math.max(1, Math.ceil((events.data?.total ?? 0) / pageSize));
   return (
-    <section className="panel audit-panel">
+    <section className={gameId ? "drawer-section game-audit-panel" : "panel audit-panel"}>
       <header className="audit-panel__head">
-        <div><div className="eyebrow">Accountability</div><h2>Player audit trail</h2><p>Logins, password activity, clue attempts, and administrative changes.</p></div>
+        <div>
+          <div className="eyebrow">Accountability</div>
+          <h2>{gameId ? "Game audit history" : "Player audit trail"}</h2>
+          <p>
+            {gameId
+              ? "Player activity and administrative changes for this game."
+              : "Logins, password activity, clue attempts, and administrative changes."}
+          </p>
+        </div>
         {events.data && <span>{events.data.total} event{events.data.total === 1 ? "" : "s"}</span>}
       </header>
       {events.isLoading ? <div className="panel-loading">Loading audit trail…</div> :
@@ -636,9 +649,9 @@ function SortableClueRow({
   );
 }
 
-function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }) {
+export function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"clues" | "players" | "progress">("clues");
+  const [tab, setTab] = useState<"clues" | "players" | "progress" | "audit">("clues");
   const [editingClue, setEditingClue] = useState<AdminClue | "new" | null>(null);
   const [editingGame, setEditingGame] = useState(false);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
@@ -747,6 +760,7 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
           <button className={tab === "clues" ? "active" : ""} onClick={() => setTab("clues")}>Clues</button>
           <button className={tab === "players" ? "active" : ""} onClick={() => setTab("players")}>Players</button>
           <button className={tab === "progress" ? "active" : ""} onClick={() => setTab("progress")}>Progress</button>
+          <button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}>Audit history</button>
         </nav>
         {detail.isLoading ? <div className="panel-loading">Loading game…</div> :
           detail.isError || !detail.data ? <ErrorMessage error={detail.error} /> :
@@ -789,8 +803,10 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
             </div>
           ) : tab === "players" ? (
             <MembershipEditor game={detail.data} users={users.data ?? []} />
-          ) : (
+          ) : tab === "progress" ? (
             <ProgressEditor game={detail.data} />
+          ) : (
+            <AuditLog gameId={gameId} />
           )
         }
         {editingClue && <ClueEditor gameId={gameId} clue={editingClue === "new" ? null : editingClue} onClose={() => setEditingClue(null)} onSaved={() => { setEditingClue(null); queryClient.invalidateQueries({ queryKey: ["admin-game", gameId] }); }} />}
@@ -1270,6 +1286,230 @@ function HintEditor({
   );
 }
 
+function DraftHintMediaEditor({
+  photo,
+  video,
+  disabled,
+  onChange,
+}: {
+  photo: File | null;
+  video: File | null;
+  disabled: boolean;
+  onChange: (mediaType: "photo" | "video", file: File | null) => void;
+}) {
+  const [selectionError, setSelectionError] = useState<Error | null>(null);
+
+  function chooseMedia(mediaType: "photo" | "video", file?: File) {
+    if (!file) return;
+    const maxBytes = mediaType === "photo" ? 8 * 1024 * 1024 : 100 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      setSelectionError(
+        new Error(
+          `${mediaType === "photo" ? "Photos" : "Videos"} cannot exceed ${
+            mediaType === "photo" ? 8 : 100
+          } MiB`,
+        ),
+      );
+      return;
+    }
+    setSelectionError(null);
+    onChange(mediaType, file);
+  }
+
+  return (
+    <section className="media-editor">
+      <div>
+        <strong>Photo</strong>
+        <small>JPEG, PNG, or WebP · maximum 8 MiB</small>
+        {photo && (
+          <div className="media-editor__preview">
+            <span>Ready to upload: {photo.name} · {formatFileSize(photo.size)}</span>
+          </div>
+        )}
+        <div className="media-editor__actions">
+          <label className="button button--secondary media-upload-button">
+            <Upload /> {photo ? "Replace photo" : "Choose photo"}
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              aria-label="Hint photo"
+              disabled={disabled}
+              onChange={(event) => {
+                chooseMedia("photo", event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {photo && (
+            <Button
+              type="button"
+              variant="danger"
+              disabled={disabled}
+              onClick={() => onChange("photo", null)}
+            >
+              Remove
+            </Button>
+          )}
+        </div>
+      </div>
+      <div>
+        <strong>Video</strong>
+        <small>MP4 or MOV · maximum 100 MiB</small>
+        {video && (
+          <div className="media-editor__preview">
+            <span>Ready to upload: {video.name} · {formatFileSize(video.size)}</span>
+          </div>
+        )}
+        <div className="media-editor__actions">
+          <label className="button button--secondary media-upload-button">
+            <Upload /> {video ? "Replace video" : "Choose video"}
+            <input
+              type="file"
+              accept="video/mp4,video/quicktime,.mp4,.mov"
+              aria-label="Hint video"
+              disabled={disabled}
+              onChange={(event) => {
+                chooseMedia("video", event.target.files?.[0]);
+                event.target.value = "";
+              }}
+            />
+          </label>
+          {video && (
+            <Button
+              type="button"
+              variant="danger"
+              disabled={disabled}
+              onClick={() => onChange("video", null)}
+            >
+              Remove
+            </Button>
+          )}
+        </div>
+      </div>
+      <ErrorMessage error={selectionError} />
+    </section>
+  );
+}
+
+function NewHintEditor({
+  clueId,
+  position,
+  onClose,
+  onSaved,
+}: {
+  clueId: string;
+  position: number;
+  onClose: () => void;
+  onSaved: (hint: AdminHint) => void;
+}) {
+  const [text, setText] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [video, setVideo] = useState<File | null>(null);
+  const [persistedHint, setPersistedHint] = useState<AdminHint | null>(null);
+  const save = useMutation({
+    mutationFn: async () => {
+      let hint = persistedHint;
+      if (hint) {
+        hint = await postJson<AdminHint>(
+          `/api/v1/admin/hints/${hint.id}`,
+          { text: text || null },
+          "PATCH",
+        );
+      } else {
+        hint = await postJson<AdminHint>(
+          `/api/v1/admin/clues/${clueId}/hints`,
+          { text: text || null },
+        );
+      }
+      setPersistedHint(hint);
+
+      for (const [mediaType, file] of [
+        ["photo", photo],
+        ["video", video],
+      ] as const) {
+        if (!file) continue;
+        const media: ClueMedia = await api<ClueMedia>(
+          `/api/v1/admin/hints/${hint.id}/media/${mediaType}`,
+          {
+            method: "PUT",
+            body: file,
+            headers: {
+              "Content-Type": file.type,
+              "X-File-Name": encodeURIComponent(file.name),
+            },
+          },
+        );
+        hint = { ...hint, [mediaType]: media };
+        setPersistedHint(hint);
+      }
+      return hint;
+    },
+    onSuccess: onSaved,
+  });
+  const discard = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/admin/hints/${persistedHint!.id}`, { method: "DELETE" }),
+    onSuccess: onClose,
+  });
+  const hasContent = Boolean(text.trim() || photo || video);
+
+  function close() {
+    if (save.isPending || discard.isPending) return;
+    if (persistedHint) discard.mutate();
+    else onClose();
+  }
+
+  return (
+    <Modal title={`Add hint ${position}`} onClose={close}>
+      <div className="modal-form">
+        <TextArea
+          label="Hint text"
+          name={`new-hint-text-${clueId}`}
+          rows={4}
+          value={text}
+          disabled={save.isPending || discard.isPending}
+          onChange={(event) => setText(event.target.value)}
+          hint="Optional when the hint includes a photo or video."
+        />
+        <DraftHintMediaEditor
+          photo={photo}
+          video={video}
+          disabled={save.isPending || discard.isPending}
+          onChange={(mediaType, file) => {
+            if (mediaType === "photo") setPhoto(file);
+            else setVideo(file);
+          }}
+        />
+        {save.isPending && (
+          <p className="media-editor__status">
+            Saving the hint and uploading its media… Keep this window open.
+          </p>
+        )}
+        <ErrorMessage error={save.error || discard.error} />
+        <div className="modal-actions">
+          <Button
+            variant="quiet"
+            type="button"
+            busy={discard.isPending}
+            disabled={save.isPending}
+            onClick={close}
+          >
+            Cancel
+          </Button>
+          <Button
+            busy={save.isPending}
+            disabled={!hasContent || discard.isPending}
+            type="button"
+            onClick={() => save.mutate()}
+          >
+            Create hint
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function SortableHintRow({
   hint,
   index,
@@ -1378,7 +1618,7 @@ export function HintsEditor({
 }) {
   const [hints, setHints] = useState(clue.hints);
   const [editing, setEditing] = useState<AdminHint | null>(null);
-  const [newText, setNewText] = useState("");
+  const [creating, setCreating] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, {
@@ -1388,17 +1628,6 @@ export function HintsEditor({
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
-  const create = useMutation({
-    mutationFn: () =>
-      postJson<AdminHint>(`/api/v1/admin/clues/${clue.id}/hints`, {
-        text: newText || null,
-      }),
-    onSuccess: (hint) => {
-      setHints((current) => [...current, hint]);
-      setNewText("");
-      onChanged();
-    },
-  });
   const reorder = useMutation({
     mutationFn: ({
       hintIds,
@@ -1513,24 +1742,28 @@ export function HintsEditor({
         </DndContext>
       )}
       <div className="hint-editor__add">
-        <TextArea
-          label="New hint text"
-          name={`new-hint-${clue.id}`}
-          rows={2}
-          value={newText}
-          onChange={(event) => setNewText(event.target.value)}
-          hint="Optional. Add the hint, then edit it to attach media."
-        />
+        <p>Add text, a photo, a video, or any combination in one step.</p>
         <Button
           type="button"
           variant="secondary"
-          busy={create.isPending}
-          onClick={() => create.mutate()}
+          onClick={() => setCreating(true)}
         >
           <Plus /> Add hint
         </Button>
       </div>
-      <ErrorMessage error={create.error || reorder.error || remove.error} />
+      <ErrorMessage error={reorder.error || remove.error} />
+      {creating && (
+        <NewHintEditor
+          clueId={clue.id}
+          position={hints.length + 1}
+          onClose={() => setCreating(false)}
+          onSaved={(hint) => {
+            setHints((current) => [...current, hint]);
+            setCreating(false);
+            onChanged();
+          }}
+        />
+      )}
       {editing && (
         <HintEditor
           hint={editing}

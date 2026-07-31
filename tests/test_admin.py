@@ -513,6 +513,17 @@ async def test_audit_events_include_the_related_game(app, admin):
             ]
         )
         expected_game = {"id": str(game.id), "title": game.title}
+        other_game = Game(title="Other Hunt", status="open")
+        db.add(other_game)
+        await db.flush()
+        db.add(
+            AuditEvent(
+                actor_id=admin.id,
+                action="game.updated",
+                entity_type="game",
+                entity_id=str(other_game.id),
+            )
+        )
 
     cookies, headers = auth(app, admin)
     _request, response = await app.asgi_client.get(
@@ -526,6 +537,17 @@ async def test_audit_events_include_the_related_game(app, admin):
     assert by_action["game.updated"]["game"] == expected_game
     assert by_action["clue.updated"]["game"] == expected_game
     assert by_action["hint.updated"]["game"] == expected_game
+
+    _request, filtered = await app.asgi_client.get(
+        f"/api/v1/admin/audit-events?game_id={game.id}",
+        cookies=cookies,
+        headers=headers,
+    )
+    assert filtered.status == 200
+    assert filtered.json["total"] == 3
+    assert {
+        item["entity_id"] for item in filtered.json["items"]
+    } == {str(game.id), str(clue.id), str(hint.id)}
 
 
 async def test_non_admin_cannot_read_audit_events(app, admin):
