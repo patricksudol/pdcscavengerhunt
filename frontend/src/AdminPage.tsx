@@ -842,6 +842,7 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
     clue: AdminClue;
     completed: boolean;
   } | null>(null);
+  const [resetting, setResetting] = useState<AdminGameDetail["players"][number] | null>(null);
   return (
     <div className="drawer-section">
       <div className="drawer-section__title"><div><h3>Player progress</h3><p>Each clue can be adjusted independently. Finishers are ranked when all clues are complete; times are shown in Eastern Time.</p></div></div>
@@ -877,6 +878,11 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
                 </div>
                 <small>{entry.completed_count} / {game.clue_count}</small>
               </div>
+              {entry.completed_count > 0 && (
+                <Button type="button" variant="quiet" onClick={() => setResetting(entry)}>
+                  <RotateCcw /> Reset all progress
+                </Button>
+              )}
             </div>
             {game.clues.length > 0 ? (
               <ol className="clue-progress-list">
@@ -920,7 +926,67 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
           onClose={() => setAdjustment(null)}
         />
       )}
+      {resetting && (
+        <AllProgressResetEditor
+          game={game}
+          entry={resetting}
+          onClose={() => setResetting(null)}
+        />
+      )}
     </div>
+  );
+}
+
+function AllProgressResetEditor({
+  game,
+  entry,
+  onClose,
+}: {
+  game: AdminGameDetail;
+  entry: AdminGameDetail["players"][number];
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [reason, setReason] = useState("");
+  const reset = useMutation({
+    mutationFn: () =>
+      postJson(
+        `/api/v1/admin/game-players/${entry.membership_id}/progress`,
+        { reason },
+        "DELETE",
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin-game", game.id] });
+      onClose();
+    },
+  });
+  return (
+    <Modal title={`Reset all progress for ${entry.user.full_name}`} onClose={onClose}>
+      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); reset.mutate(); }}>
+        <p>
+          This clears all completed clues, revealed hints, and revealed answers for this player.
+          They will restart the game from the beginning.
+        </p>
+        <TextArea
+          label="Reason"
+          name="all-progress-reset-reason"
+          rows={3}
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          required
+          minLength={3}
+          maxLength={500}
+          hint="Required for the audit log."
+        />
+        <ErrorMessage error={reset.error} />
+        <div className="modal-actions">
+          <Button variant="quiet" type="button" onClick={onClose}>Cancel</Button>
+          <Button variant="danger" busy={reset.isPending} type="submit">
+            <RotateCcw /> Reset all progress
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 
@@ -1272,15 +1338,17 @@ function HintEditor({
   );
 }
 
-function DraftHintMediaEditor({
+function DraftMediaEditor({
   photo,
   video,
   disabled,
+  ownerLabel,
   onChange,
 }: {
   photo: File | null;
   video: File | null;
   disabled: boolean;
+  ownerLabel: "Clue" | "Hint";
   onChange: (mediaType: "photo" | "video", file: File | null) => void;
 }) {
   const [selectionError, setSelectionError] = useState<Error | null>(null);
@@ -1318,7 +1386,7 @@ function DraftHintMediaEditor({
             <input
               type="file"
               accept="image/jpeg,image/png,image/webp"
-              aria-label="Hint photo"
+              aria-label={`${ownerLabel} photo`}
               disabled={disabled}
               onChange={(event) => {
                 chooseMedia("photo", event.target.files?.[0]);
@@ -1352,7 +1420,7 @@ function DraftHintMediaEditor({
             <input
               type="file"
               accept="video/mp4,video/quicktime,.mp4,.mov"
-              aria-label="Hint video"
+              aria-label={`${ownerLabel} video`}
               disabled={disabled}
               onChange={(event) => {
                 chooseMedia("video", event.target.files?.[0]);
@@ -1457,10 +1525,11 @@ function NewHintEditor({
           onChange={(event) => setText(event.target.value)}
           hint="Optional when the hint includes a photo or video."
         />
-        <DraftHintMediaEditor
+        <DraftMediaEditor
           photo={photo}
           video={video}
           disabled={save.isPending || discard.isPending}
+          ownerLabel="Hint"
           onChange={(mediaType, file) => {
             if (mediaType === "photo") setPhoto(file);
             else setVideo(file);
@@ -1762,31 +1831,84 @@ export function HintsEditor({
   );
 }
 
-function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: AdminClue | null; onClose: () => void; onSaved: () => void }) {
+export function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: AdminClue | null; onClose: () => void; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const [title, setTitle] = useState(clue?.title ?? "");
   const [content, setContent] = useState(clue?.content ?? "");
   const [code, setCode] = useState(clue?.code ?? "");
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [video, setVideo] = useState<File | null>(null);
+  const [persistedClue, setPersistedClue] = useState<AdminClue | null>(null);
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const payload: { title: string; content: string; code?: string } = { title, content };
       if (code) payload.code = code;
-      return clue
-        ? postJson(`/api/v1/admin/clues/${clue.id}`, payload, "PATCH")
-        : postJson(`/api/v1/admin/games/${gameId}/clues`, { ...payload, code });
+      if (clue) {
+        return postJson<AdminClue>(`/api/v1/admin/clues/${clue.id}`, payload, "PATCH");
+      }
+
+      let savedClue = persistedClue;
+      if (savedClue) {
+        savedClue = await postJson<AdminClue>(
+          `/api/v1/admin/clues/${savedClue.id}`,
+          payload,
+          "PATCH",
+        );
+      } else {
+        savedClue = await postJson<AdminClue>(
+          `/api/v1/admin/games/${gameId}/clues`,
+          { ...payload, code },
+        );
+      }
+      setPersistedClue(savedClue);
+
+      for (const [mediaType, file] of [
+        ["photo", photo],
+        ["video", video],
+      ] as const) {
+        if (!file) continue;
+        const uploadedMedia: ClueMedia = await api<ClueMedia>(
+          `/api/v1/admin/clues/${savedClue.id}/media/${mediaType}`,
+          {
+            method: "PUT",
+            body: file,
+            headers: {
+              "Content-Type": file.type,
+              "X-File-Name": encodeURIComponent(file.name),
+            },
+          },
+        );
+        savedClue = { ...savedClue, [mediaType]: uploadedMedia };
+        setPersistedClue(savedClue);
+      }
+      return savedClue;
     },
     onSuccess: onSaved,
   });
+  const discard = useMutation({
+    mutationFn: () =>
+      api(`/api/v1/admin/clues/${persistedClue!.id}`, { method: "DELETE" }),
+    onSuccess: onClose,
+  });
+  const busy = save.isPending || discard.isPending;
+
+  function close() {
+    if (busy) return;
+    if (!clue && persistedClue) discard.mutate();
+    else onClose();
+  }
+
   return (
-    <Modal title={clue ? `Edit clue ${clue.position}` : "Add clue"} onClose={onClose}>
+    <Modal title={clue ? `Edit clue ${clue.position}` : "Add clue"} onClose={close}>
       <form className="modal-form" onSubmit={(event) => { event.preventDefault(); save.mutate(); }}>
-        <Field label="Clue" name="clue-title" value={title} onChange={(event) => setTitle(event.target.value)} required />
-        <TextArea label="Answer" name="content" rows={5} value={content} onChange={(event) => setContent(event.target.value)} required />
+        <Field label="Clue" name="clue-title" value={title} disabled={busy} onChange={(event) => setTitle(event.target.value)} required />
+        <TextArea label="Answer" name="content" rows={5} value={content} disabled={busy} onChange={(event) => setContent(event.target.value)} required />
         <Field
           label={clue ? "Code" : "Unique code"}
           name="code"
           autoComplete="off"
           value={code}
+          disabled={busy}
           onChange={(event) => setCode(event.target.value)}
           required={!clue}
           hint={
@@ -1815,12 +1937,27 @@ function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: 
             />
           </>
         ) : (
-          <p className="media-editor__new-note">
-            Save this clue, then reopen it to attach a photo or video.
+          <DraftMediaEditor
+            photo={photo}
+            video={video}
+            disabled={busy}
+            ownerLabel="Clue"
+            onChange={(mediaType, file) => {
+              if (mediaType === "photo") setPhoto(file);
+              else setVideo(file);
+            }}
+          />
+        )}
+        {!clue && save.isPending && (photo || video) && (
+          <p className="media-editor__status">
+            Saving the clue and uploading its media… Keep this window open.
           </p>
         )}
-        <ErrorMessage error={save.error} />
-        <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={save.isPending} type="submit">Save clue</Button></div>
+        <ErrorMessage error={save.error || discard.error} />
+        <div className="modal-actions">
+          <Button variant="quiet" type="button" busy={discard.isPending} disabled={save.isPending} onClick={close}>Cancel</Button>
+          <Button busy={save.isPending} disabled={discard.isPending} type="submit">Save clue</Button>
+        </div>
       </form>
     </Modal>
   );

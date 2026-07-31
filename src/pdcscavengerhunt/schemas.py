@@ -84,3 +84,8 @@ class MembershipUpdate(BaseModel):
 class ProgressAdjustment(BaseModel):
     reason: str = Field(min_length=3, max_length=500)
     clue_id: UUID
+
+
+class ProgressReset(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+    clue_id: UUID | None = None

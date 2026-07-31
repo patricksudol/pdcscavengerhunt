@@ -39,6 +39,7 @@ from .schemas import (
     HintUpdate,
     MembershipUpdate,
     ProgressAdjustment,
+    ProgressReset,
     UserCreate,
     UserUpdate,
 )
@@ -1676,25 +1677,14 @@ async def delete_clue(request: Request, clue_id: UUID):
 
 @admin_bp.delete("/game-players/<membership_id:uuid>/progress")
 @login_required(admin=True)
-async def reset_clue_progress(request: Request, membership_id: UUID):
-    payload = ProgressAdjustment.model_validate(request.json or {})
+async def reset_progress(request: Request, membership_id: UUID):
+    payload = ProgressReset.model_validate(request.json or {})
     async with request.app.ctx.db.session() as db:
         membership = await db.scalar(
             select(GamePlayer).where(GamePlayer.id == membership_id).with_for_update()
         )
         if not membership:
             raise NotFound("Game assignment not found")
-        clue = await db.get(Clue, payload.clue_id)
-        if not clue or clue.game_id != membership.game_id:
-            raise InvalidUsage("That clue does not belong to this game")
-        completion = await db.scalar(
-            select(ClueCompletion).where(
-                ClueCompletion.game_player_id == membership.id,
-                ClueCompletion.clue_id == clue.id,
-            )
-        )
-        if not completion:
-            raise InvalidUsage("The player has not completed that clue")
         completion_count = (
             await db.scalar(
                 select(func.count(ClueCompletion.id)).where(
@@ -1703,27 +1693,57 @@ async def reset_clue_progress(request: Request, membership_id: UUID):
             )
             or 0
         )
-        await db.delete(completion)
-        await db.execute(
-            delete(HintReveal).where(
-                HintReveal.game_player_id == membership.id,
-                HintReveal.hint_id.in_(
-                    select(Hint.id).where(Hint.clue_id == clue.id)
-                ),
+        if not completion_count:
+            raise InvalidUsage("The player has no completed clues")
+
+        clue = None
+        if payload.clue_id:
+            clue = await db.get(Clue, payload.clue_id)
+            if not clue or clue.game_id != membership.game_id:
+                raise InvalidUsage("That clue does not belong to this game")
+            completion = await db.scalar(
+                select(ClueCompletion).where(
+                    ClueCompletion.game_player_id == membership.id,
+                    ClueCompletion.clue_id == clue.id,
+                )
             )
-        )
-        await db.execute(
-            delete(ClueAnswerReveal).where(
-                ClueAnswerReveal.game_player_id == membership.id,
-                ClueAnswerReveal.clue_id == clue.id,
+            if not completion:
+                raise InvalidUsage("The player has not completed that clue")
+            await db.delete(completion)
+            await db.execute(
+                delete(HintReveal).where(
+                    HintReveal.game_player_id == membership.id,
+                    HintReveal.hint_id.in_(
+                        select(Hint.id).where(Hint.clue_id == clue.id)
+                    ),
+                )
             )
-        )
+            await db.execute(
+                delete(ClueAnswerReveal).where(
+                    ClueAnswerReveal.game_player_id == membership.id,
+                    ClueAnswerReveal.clue_id == clue.id,
+                )
+            )
+        else:
+            await db.execute(
+                delete(ClueCompletion).where(
+                    ClueCompletion.game_player_id == membership.id
+                )
+            )
+            await db.execute(
+                delete(HintReveal).where(HintReveal.game_player_id == membership.id)
+            )
+            await db.execute(
+                delete(ClueAnswerReveal).where(
+                    ClueAnswerReveal.game_player_id == membership.id
+                )
+            )
         await db.flush()
-        remaining_count = completion_count - 1
+        remaining_count = completion_count - 1 if clue else 0
         db.add(
             audit(
                 request,
-                action="player.clue_reset",
+                action="player.clue_reset" if clue else "player.progress_reset",
                 entity_type="game_player",
                 entity_id=str(membership.id),
                 before={"completion_count": completion_count},
@@ -1731,8 +1751,8 @@ async def reset_clue_progress(request: Request, membership_id: UUID):
                     "completion_count": remaining_count,
                     "game_id": str(membership.game_id),
                     "user_id": str(membership.user_id),
-                    "clue_id": str(clue.id),
-                    "position": clue.position,
+                    "clue_id": str(clue.id) if clue else None,
+                    "position": clue.position if clue else None,
                 },
                 reason=payload.reason.strip(),
             )
@@ -1740,7 +1760,7 @@ async def reset_clue_progress(request: Request, membership_id: UUID):
         return {
             "reset": True,
             "completion_count": remaining_count,
-            "clue_id": str(clue.id),
+            "clue_id": str(clue.id) if clue else None,
         }
 
 

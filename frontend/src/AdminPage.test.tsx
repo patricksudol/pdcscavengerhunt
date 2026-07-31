@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   AuditTable,
+  ClueEditor,
   GameEditor,
   HintsEditor,
   Players,
@@ -14,6 +15,7 @@ import type {
   AdminGameDetail,
   AdminUser,
   AuditEvent,
+  ClueMedia,
   Me,
 } from "./api";
 
@@ -164,6 +166,106 @@ describe("admin player progress", () => {
     expect(screen.getByRole("textbox", { name: /reason/i })).toBeRequired();
   });
 
+  it("offers reset all only for players with completed clues", async () => {
+    const completedPlayer = {
+      membership_id: "membership-complete",
+      user: {
+        id: "player-complete",
+        email_address: "complete@example.com",
+        full_name: "Complete Player",
+        is_admin: false,
+        active: true,
+        password_set: true,
+        created_at: "2026-07-28T12:00:00+00:00",
+        last_login_at: null,
+      },
+      completed_count: 1,
+      completed_clue_ids: ["clue-1"],
+      completion_rank: 1,
+      finished_at: "2026-07-28T14:35:00+00:00",
+      completions: [
+        { clue_id: "clue-1", completed_at: "2026-07-28T14:35:00+00:00" },
+      ],
+    };
+    const game: AdminGameDetail = {
+      id: "game-reset-all",
+      title: "Reset All Hunt",
+      description: null,
+      instructions: null,
+      closing_message: null,
+      allow_answer_reveal: false,
+      status: "open",
+      player_count: 2,
+      clue_count: 1,
+      completion_count: 1,
+      created_at: "2026-07-28T12:00:00+00:00",
+      updated_at: "2026-07-28T12:00:00+00:00",
+      clues: [{
+        id: "clue-1",
+        position: 1,
+        title: "Final clue",
+        content: "The finish",
+        code: "FINISH",
+        code_set: true,
+        photo: null,
+        video: null,
+        hints: [],
+      }],
+      players: [
+        completedPlayer,
+        {
+          ...completedPlayer,
+          membership_id: "membership-new",
+          user: {
+            ...completedPlayer.user,
+            id: "player-new",
+            email_address: "new@example.com",
+            full_name: "New Player",
+          },
+          completed_count: 0,
+          completed_clue_ids: [],
+          completion_rank: null,
+          finished_at: null,
+          completions: [],
+        },
+      ],
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ reset: true, completion_count: 0, clue_id: null }),
+    );
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ProgressEditor game={game} />
+      </QueryClientProvider>,
+    );
+
+    const resetButtons = screen.getAllByRole("button", { name: /reset all progress/i });
+    expect(resetButtons).toHaveLength(1);
+    fireEvent.click(resetButtons[0]);
+
+    expect(
+      screen.getByRole("heading", { name: "Reset all progress for Complete Player" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/restart the game from the beginning/i)).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: /reason/i }), {
+      target: { value: "Player requested a restart" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: /reset all progress/i })[1]);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/v1/admin/game-players/membership-complete/progress",
+        expect.objectContaining({
+          method: "DELETE",
+          body: JSON.stringify({ reason: "Player requested a restart" }),
+        }),
+      );
+    });
+  });
+
   it("shows the completion time for each solved clue", () => {
     const game: AdminGameDetail = {
       id: "game-1",
@@ -300,6 +402,112 @@ describe("admin player progress", () => {
     expect(screen.getByLabelText("2nd place")).toHaveClass("finish-rank--silver");
     expect(screen.getByLabelText("3rd place")).toHaveClass("finish-rank--bronze");
     expect(screen.getByLabelText("4th place")).toHaveClass("finish-rank--numbered");
+  });
+});
+
+describe("admin clue creation", () => {
+  it("lets an admin choose photo and video before saving a new clue", async () => {
+    const createdClue: AdminClue = {
+      id: "clue-new",
+      position: 1,
+      title: "Find the clock",
+      content: "Look above the entrance.",
+      code: "CLOCK",
+      code_set: true,
+      photo: null,
+      video: null,
+      hints: [],
+    };
+    const uploadedPhoto: ClueMedia = {
+      id: "photo-new",
+      media_type: "photo",
+      original_filename: "clock.png",
+      content_type: "image/png",
+      size_bytes: 11,
+      status: "ready",
+      url: "/api/v1/media/photo-new",
+    };
+    const uploadedVideo: ClueMedia = {
+      id: "video-new",
+      media_type: "video",
+      original_filename: "clock.mp4",
+      content_type: "video/mp4",
+      size_bytes: 11,
+      status: "processing",
+      url: "/api/v1/media/video-new",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (input, init) => {
+        const path = String(input);
+        if (
+          path === "/api/v1/admin/games/game-new-clue/clues"
+          && init?.method === "POST"
+        ) {
+          return jsonResponse(createdClue);
+        }
+        if (
+          path === "/api/v1/admin/clues/clue-new/media/photo"
+          && init?.method === "PUT"
+        ) {
+          return jsonResponse(uploadedPhoto);
+        }
+        if (
+          path === "/api/v1/admin/clues/clue-new/media/video"
+          && init?.method === "PUT"
+        ) {
+          return jsonResponse(uploadedVideo);
+        }
+        throw new Error(`Unexpected request: ${path}`);
+      },
+    );
+    const onSaved = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { mutations: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ClueEditor
+          gameId="game-new-clue"
+          clue={null}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+        />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Clue" }), {
+      target: { value: "Find the clock" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: "Answer" }), {
+      target: { value: "Look above the entrance." },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /^Unique code/ }), {
+      target: { value: "CLOCK" },
+    });
+    const photo = new File(["photo bytes"], "clock.png", { type: "image/png" });
+    const video = new File(["video bytes"], "clock.mp4", { type: "video/mp4" });
+    fireEvent.change(screen.getByLabelText("Clue photo"), {
+      target: { files: [photo] },
+    });
+    fireEvent.change(screen.getByLabelText("Clue video"), {
+      target: { files: [video] },
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/Ready to upload: clock.png/)).toBeInTheDocument();
+    expect(screen.getByText(/Ready to upload: clock.mp4/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save clue" }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      title: "Find the clock",
+      content: "Look above the entrance.",
+      code: "CLOCK",
+    });
+    expect(fetchMock.mock.calls[1][1]?.body).toBe(photo);
+    expect(fetchMock.mock.calls[2][1]?.body).toBe(video);
   });
 });
 

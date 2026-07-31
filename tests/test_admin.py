@@ -599,6 +599,100 @@ async def test_non_admin_cannot_read_audit_events(app, admin):
     assert response.status == 403
 
 
+async def test_admin_can_reset_all_player_progress(app, admin):
+    async with app.ctx.db.session() as db:
+        player = User(
+            email_address="full-reset@example.com",
+            normalized_email_address="full-reset@example.com",
+            full_name="Full Reset",
+        )
+        game = Game(title="Full Reset Game", status="open")
+        db.add_all([player, game])
+        await db.flush()
+        membership = GamePlayer(game_id=game.id, user_id=player.id)
+        clues = [
+            Clue(
+                game_id=game.id,
+                position=position,
+                title=f"Clue {position}",
+                content=f"Answer {position}",
+                code_fingerprint=fingerprint_code(f"RESET-{position}", app.ctx.settings),
+            )
+            for position in range(1, 3)
+        ]
+        db.add_all([membership, *clues])
+        await db.flush()
+        hints = [
+            Hint(clue_id=clue.id, position=1, text=f"Hint for clue {clue.position}")
+            for clue in clues
+        ]
+        db.add_all(hints)
+        await db.flush()
+        db.add_all(
+            [
+                ClueCompletion(game_player_id=membership.id, clue_id=clue.id)
+                for clue in clues
+            ]
+            + [HintReveal(game_player_id=membership.id, hint_id=hint.id) for hint in hints]
+            + [
+                ClueAnswerReveal(game_player_id=membership.id, clue_id=clue.id)
+                for clue in clues
+            ]
+        )
+        membership_id = membership.id
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.request(
+        "DELETE",
+        f"/api/v1/admin/game-players/{membership_id}/progress",
+        json={"reason": "Player asked to restart the game"},
+        cookies=cookies,
+        headers=headers,
+    )
+
+    assert response.status == 200
+    assert response.json == {
+        "reset": True,
+        "completion_count": 0,
+        "clue_id": None,
+    }
+
+    async with app.ctx.db.session() as db:
+        assert (
+            await db.scalar(
+                select(ClueCompletion.id).where(
+                    ClueCompletion.game_player_id == membership_id
+                )
+            )
+            is None
+        )
+        assert (
+            await db.scalar(
+                select(HintReveal.id).where(HintReveal.game_player_id == membership_id)
+            )
+            is None
+        )
+        assert (
+            await db.scalar(
+                select(ClueAnswerReveal.id).where(
+                    ClueAnswerReveal.game_player_id == membership_id
+                )
+            )
+            is None
+        )
+        event = await db.scalar(
+            select(AuditEvent).where(
+                AuditEvent.action == "player.progress_reset",
+                AuditEvent.entity_id == str(membership_id),
+            )
+        )
+        assert event
+        assert event.reason == "Player asked to restart the game"
+        assert event.before["completion_count"] == 2
+        assert event.after["completion_count"] == 0
+        assert event.after["clue_id"] is None
+
+
 async def test_admin_can_reset_one_clue_without_changing_other_clues(app, admin):
     async with app.ctx.db.session() as db:
         player = User(
