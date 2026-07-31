@@ -309,8 +309,8 @@ textarea:focus-visible, select:focus-visible {
 .game-card__icon { width: 48px; height: 48px; background: var(--sky); color: var(--navy); display: grid; place-items: center; margin: 1.4rem 0; }
 .game-card h2 { margin-bottom: .5rem; }
 .game-card p { color: var(--muted); font-size: .88rem; line-height: 1.55; flex: 1; }
-.progress > div, .mini-progress > div { height: 8px; background: #e7edf1; overflow: hidden; }
-.progress > div span, .mini-progress > div span { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--lime)); }
+.progress > div { height: 8px; background: #e7edf1; overflow: hidden; }
+.progress > div span { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--lime)); }
 .progress small { display: block; color: var(--muted); margin-top: .5rem; }
 .back-link { color: var(--navy); text-decoration: none; font-weight: 800; font-size: .78rem; text-transform: uppercase; letter-spacing: .07em; display: inline-flex; gap: .45rem; margin-bottom: 1.4rem; }
 .back-link svg { width: 18px; }
@@ -1028,18 +1028,23 @@ textarea:focus-visible, select:focus-visible {
 .finish-rank--bronze { background: #f5dfd0; border-color: #bd815c; color: #754226; }
 .finish-rank--bronze > svg { fill: #c9855c; stroke: #754226; }
 .finish-rank--numbered { background: #e7f1fb; border-color: #a8c7dd; color: var(--navy); }
-.mini-progress { display: flex; align-items: center; gap: .6rem; flex: 1; }
-.mini-progress > div { flex: 1; }
-.completion-timeline { list-style: none; margin: 1rem 0 0 44px; padding: 0; border-left: 2px solid #d9e6ee; }
-.completion-timeline li { min-height: 52px; display: grid; grid-template-columns: minmax(150px, 1fr) auto; align-items: center; gap: 1rem; position: relative; padding: .55rem .75rem .55rem 1.25rem; background: #f7f9fa; border-bottom: 1px solid #e3e9ed; }
-.completion-timeline li:last-child { border-bottom: 0; }
-.completion-timeline__marker { width: 22px; height: 22px; position: absolute; left: -12px; display: grid; place-items: center; background: var(--lime); color: var(--navy-deep); border: 3px solid white; border-radius: 50%; }
-.completion-timeline__marker svg { width: 12px; height: 12px; stroke-width: 3; }
-.completion-timeline__clue { min-width: 0; display: flex; flex-direction: column; }
-.completion-timeline__clue small { font-size: .6rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; }
-.completion-timeline__clue strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
-.completion-timeline time { display: inline-flex; align-items: center; gap: .35rem; color: var(--navy); font-size: .7rem; font-weight: 700; white-space: nowrap; }
-.completion-timeline time svg { width: 15px; height: 15px; color: var(--blue); }
+.clue-progress { display: flex; align-items: center; gap: .6rem; flex: 1; }
+.clue-progress__segments { min-width: 100px; display: flex; flex: 1; gap: 3px; }
+.clue-progress__segments span { height: 9px; flex: 1; background: #dce5eb; }
+.clue-progress__segments .clue-progress__segment--completed { background: var(--green); }
+.clue-progress-list { list-style: none; margin: 1rem 0 0 44px; padding: 0; border: 1px solid #d9e6ee; }
+.clue-progress-list li { min-height: 58px; display: grid; grid-template-columns: 34px minmax(150px, 1fr) auto auto; align-items: center; gap: .75rem; padding: .55rem .75rem; background: #f7f9fa; border-bottom: 1px solid #e3e9ed; }
+.clue-progress-list li:last-child { border-bottom: 0; }
+.clue-progress-list__marker { width: 28px; height: 28px; display: grid; place-items: center; background: #dce5eb; color: var(--muted); font-size: .68rem; font-weight: 800; }
+.clue-progress-list__item--completed .clue-progress-list__marker { background: var(--lime); color: var(--navy-deep); }
+.clue-progress-list__marker svg { width: 15px; height: 15px; stroke-width: 3; }
+.clue-progress-list__clue { min-width: 0; display: flex; flex-direction: column; }
+.clue-progress-list__clue small { font-size: .6rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; }
+.clue-progress-list__clue strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .78rem; }
+.clue-progress-list time { display: inline-flex; align-items: center; gap: .35rem; color: var(--navy); font-size: .7rem; font-weight: 700; white-space: nowrap; }
+.clue-progress-list time svg { width: 15px; height: 15px; color: var(--blue); }
+.clue-progress-list__status { color: var(--muted); font-size: .7rem; font-weight: 700; }
+.clue-progress-list .button { min-width: 130px; justify-content: center; }
 .progress-player__empty { margin: .75rem 0 0 44px; color: var(--muted); font-size: .75rem; font-style: italic; }
 .security-panel { max-width: 630px; padding: 1.8rem; }
 .security-panel > p { color: var(--muted); }
@@ -1128,9 +1133,11 @@ textarea:focus-visible, select:focus-visible {
   .hint-admin-row { grid-template-columns: 68px minmax(0, 1fr); }
   .hint-admin-actions { grid-column: 2; }
   .progress-player__summary { align-items: flex-start; flex-wrap: wrap; }
-  .mini-progress { flex-basis: 100%; margin-left: 44px; }
-  .completion-timeline { margin-left: 12px; }
-  .completion-timeline li { grid-template-columns: 1fr; gap: .3rem; }
+  .clue-progress { flex-basis: 100%; margin-left: 44px; }
+  .clue-progress-list { margin-left: 12px; }
+  .clue-progress-list li { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .clue-progress-list time, .clue-progress-list__status { grid-column: 2; }
+  .clue-progress-list .button { grid-column: 3; grid-row: 1 / span 2; }
   .progress-player__empty { margin-left: 44px; }
   .modal-actions { flex-wrap: wrap; }
 }

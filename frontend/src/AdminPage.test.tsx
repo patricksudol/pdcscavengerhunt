@@ -89,7 +89,7 @@ describe("admin player accounts", () => {
 });
 
 describe("admin player progress", () => {
-  it("lets an admin advance an incomplete player to a later clue", () => {
+  it("lets an admin mark any individual clue complete", () => {
     const game: AdminGameDetail = {
       id: "game-advance",
       title: "Advance Hunt",
@@ -100,7 +100,7 @@ describe("admin player progress", () => {
       status: "open",
       player_count: 1,
       clue_count: 3,
-      completion_count: 0,
+      completion_count: 2,
       created_at: "2026-07-28T12:00:00+00:00",
       updated_at: "2026-07-28T12:00:00+00:00",
       clues: [1, 2, 3].map((position) => ({
@@ -127,11 +127,14 @@ describe("admin player progress", () => {
             created_at: "2026-07-28T12:00:00+00:00",
             last_login_at: null,
           },
-          completed_count: 0,
-          completed_clue_ids: [],
+          completed_count: 2,
+          completed_clue_ids: ["clue-1", "clue-3"],
           completion_rank: null,
           finished_at: null,
-          completions: [],
+          completions: [
+            { clue_id: "clue-1", completed_at: "2026-07-28T13:00:00+00:00" },
+            { clue_id: "clue-3", completed_at: "2026-07-28T14:00:00+00:00" },
+          ],
         },
       ],
     };
@@ -142,12 +145,22 @@ describe("admin player progress", () => {
         <ProgressEditor game={game} />
       </QueryClientProvider>,
     );
-    fireEvent.click(screen.getByRole("button", { name: /advance/i }));
+    expect(screen.getByTitle("Clue 1: complete")).toHaveClass(
+      "clue-progress__segment--completed",
+    );
+    expect(screen.getByTitle("Clue 2: incomplete")).not.toHaveClass(
+      "clue-progress__segment--completed",
+    );
+    expect(screen.getByTitle("Clue 3: complete")).toHaveClass(
+      "clue-progress__segment--completed",
+    );
 
-    expect(screen.getByRole("heading", { name: "Advance Advance Player" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Clue 2: Clue 2" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "Clue 3: Clue 3" })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: "Clue 1: Clue 1" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /mark complete/i }));
+
+    expect(
+      screen.getByRole("heading", { name: "Complete clue 2 for Advance Player" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Other clues keep their current status/)).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: /reason/i })).toBeRequired();
   });
 
@@ -213,6 +226,9 @@ describe("admin player progress", () => {
       "2026-07-28T14:35:00+00:00",
     );
     expect(screen.getByLabelText("1st place")).toHaveClass("finish-rank--gold");
+    expect(screen.getByTitle("Clue 1: complete")).toHaveClass(
+      "clue-progress__segment--completed",
+    );
   });
 
   it("uses medal treatments for the top three and ranks every other finisher", () => {

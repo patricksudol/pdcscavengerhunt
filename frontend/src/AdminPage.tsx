@@ -25,7 +25,6 @@ import {
   ChevronUp,
   Clock3,
   Clipboard,
-  FastForward,
   Gamepad2,
   GripVertical,
   Image as ImageIcon,
@@ -38,6 +37,7 @@ import {
   Menu,
   Pencil,
   Plus,
+  RotateCcw,
   Shield,
   Trash2,
   Upload,
@@ -296,6 +296,8 @@ const auditActionLabels: Record<string, string> = {
   "hint.revealed": "Revealed hint",
   "player.progress_advanced": "Advanced player progress",
   "player.progress_reset": "Reset player progress",
+  "player.clue_completed": "Marked a player's clue complete",
+  "player.clue_reset": "Reset a player's clue",
 };
 
 function humanize(value: string) {
@@ -835,12 +837,14 @@ export function GameEditor({ gameId, onClose }: { gameId: string; onClose: () =>
 }
 
 export function ProgressEditor({ game }: { game: AdminGameDetail }) {
-  const [resetting, setResetting] = useState<AdminGameDetail["players"][number] | null>(null);
-  const [advancing, setAdvancing] = useState<AdminGameDetail["players"][number] | null>(null);
-  const cluesById = new Map(game.clues.map((clue) => [clue.id, clue]));
+  const [adjustment, setAdjustment] = useState<{
+    entry: AdminGameDetail["players"][number];
+    clue: AdminClue;
+    completed: boolean;
+  } | null>(null);
   return (
     <div className="drawer-section">
-      <div className="drawer-section__title"><div><h3>Player progress</h3><p>Finishers are ranked by their final clue. Times are shown in Eastern Time.</p></div></div>
+      <div className="drawer-section__title"><div><h3>Player progress</h3><p>Each clue can be adjusted independently. Finishers are ranked when all clues are complete; times are shown in Eastern Time.</p></div></div>
       {!game.players.length ? <EmptyState icon={<Users />} title="No assigned players">Assign players to begin tracking progress.</EmptyState> :
         <div className="progress-list">{game.players.map((entry) => (
           <article className="progress-player" key={entry.user.id}>
@@ -857,72 +861,90 @@ export function ProgressEditor({ game }: { game: AdminGameDetail }) {
                   <span><strong>{ordinal(entry.completion_rank)}</strong><small>place</small></span>
                 </span>
               )}
-              <div className="mini-progress"><div><span style={{ width: `${game.clue_count ? (entry.completed_count / game.clue_count) * 100 : 0}%` }} /></div><small>{entry.completed_count} / {game.clue_count}</small></div>
-              {entry.completed_count < game.clue_count - 1 && <Button variant="quiet" onClick={() => setAdvancing(entry)}><FastForward /> Advance…</Button>}
-              {entry.completed_count > 0 && <Button variant="quiet" onClick={() => setResetting(entry)}>Reset…</Button>}
+              <div className="clue-progress">
+                <div
+                  className="clue-progress__segments"
+                  role="img"
+                  aria-label={`${entry.completed_count} of ${game.clue_count} clues complete`}
+                >
+                  {game.clues.map((clue) => (
+                    <span
+                      className={entry.completed_clue_ids.includes(clue.id) ? "clue-progress__segment--completed" : undefined}
+                      title={`Clue ${clue.position}: ${entry.completed_clue_ids.includes(clue.id) ? "complete" : "incomplete"}`}
+                      key={clue.id}
+                    />
+                  ))}
+                </div>
+                <small>{entry.completed_count} / {game.clue_count}</small>
+              </div>
             </div>
-            {entry.completions.length > 0 ? (
-              <ol className="completion-timeline">
-                {entry.completions.map((completion) => {
-                  const clue = cluesById.get(completion.clue_id);
+            {game.clues.length > 0 ? (
+              <ol className="clue-progress-list">
+                {game.clues.map((clue) => {
+                  const completion = entry.completions.find((item) => item.clue_id === clue.id);
                   return (
-                    <li key={completion.clue_id}>
-                      <span className="completion-timeline__marker"><Check /></span>
-                      <span className="completion-timeline__clue">
-                        <small>Clue {clue?.position ?? "—"}</small>
-                        <strong>{clue?.title ?? "Deleted clue"}</strong>
+                    <li className={completion ? "clue-progress-list__item--completed" : undefined} key={clue.id}>
+                      <span className="clue-progress-list__marker">
+                        {completion ? <Check /> : clue.position}
                       </span>
-                      <time dateTime={completion.completed_at}><Clock3 /> {formatDate(completion.completed_at)}</time>
+                      <span className="clue-progress-list__clue">
+                        <small>Clue {clue.position}</small>
+                        <strong>{clue.title}</strong>
+                      </span>
+                      {completion ? (
+                        <time dateTime={completion.completed_at}><Clock3 /> {formatDate(completion.completed_at)}</time>
+                      ) : (
+                        <span className="clue-progress-list__status">Incomplete</span>
+                      )}
+                      <Button
+                        type="button"
+                        variant={completion ? "quiet" : "primary"}
+                        onClick={() => setAdjustment({ entry, clue, completed: Boolean(completion) })}
+                      >
+                        {completion ? <><RotateCcw /> Reset clue</> : <><Check /> Mark complete</>}
+                      </Button>
                     </li>
                   );
                 })}
               </ol>
             ) : (
-              <p className="progress-player__empty">No clues solved yet.</p>
+              <p className="progress-player__empty">This game has no clues yet.</p>
             )}
           </article>
         ))}</div>
       }
-      {resetting && (
-        <ProgressResetEditor
+      {adjustment && (
+        <ClueProgressEditor
           game={game}
-          entry={resetting}
-          onClose={() => setResetting(null)}
-        />
-      )}
-      {advancing && (
-        <ProgressAdvanceEditor
-          game={game}
-          entry={advancing}
-          onClose={() => setAdvancing(null)}
+          {...adjustment}
+          onClose={() => setAdjustment(null)}
         />
       )}
     </div>
   );
 }
 
-function ProgressAdvanceEditor({
+function ClueProgressEditor({
   game,
   entry,
+  clue,
+  completed,
   onClose,
 }: {
   game: AdminGameDetail;
   entry: AdminGameDetail["players"][number];
+  clue: AdminClue;
+  completed: boolean;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const firstIncompleteIndex = game.clues.findIndex(
-    (clue) => !entry.completed_clue_ids.includes(clue.id),
-  );
-  const targets = game.clues.slice(firstIncompleteIndex + 1);
-  const [target, setTarget] = useState(targets[0]?.id ?? "");
   const [reason, setReason] = useState("");
-  const advance = useMutation({
+  const adjustment = useMutation({
     mutationFn: () =>
       postJson(
         `/api/v1/admin/game-players/${entry.membership_id}/progress`,
-        { reason, clue_id: target },
-        "PUT",
+        { reason, clue_id: clue.id },
+        completed ? "DELETE" : "PUT",
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-game", game.id] });
@@ -930,22 +952,16 @@ function ProgressAdvanceEditor({
     },
   });
   return (
-    <Modal title={`Advance ${entry.user.full_name}`} onClose={onClose}>
-      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); advance.mutate(); }}>
-        <label className="field">
-          <span>Advance to</span>
-          <select value={target} onChange={(event) => setTarget(event.target.value)}>
-            {targets.map((clue) => (
-              <option value={clue.id} key={clue.id}>
-                Clue {clue.position}: {clue.title}
-              </option>
-            ))}
-          </select>
-          <small>All earlier clues will be marked complete at the current time.</small>
-        </label>
+    <Modal title={`${completed ? "Reset" : "Complete"} clue ${clue.position} for ${entry.user.full_name}`} onClose={onClose}>
+      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); adjustment.mutate(); }}>
+        <p>
+          {completed
+            ? `This resets “${clue.title}” only. Other clues keep their current status. This clue’s revealed hints and answer will also be cleared.`
+            : `This marks “${clue.title}” complete now. Other clues keep their current status.`}
+        </p>
         <TextArea
           label="Reason"
-          name="advance-reason"
+          name="clue-progress-reason"
           rows={3}
           value={reason}
           onChange={(event) => setReason(event.target.value)}
@@ -954,10 +970,12 @@ function ProgressAdvanceEditor({
           maxLength={500}
           hint="Required for the audit log."
         />
-        <ErrorMessage error={advance.error} />
+        <ErrorMessage error={adjustment.error} />
         <div className="modal-actions">
           <Button variant="quiet" type="button" onClick={onClose}>Cancel</Button>
-          <Button busy={advance.isPending} type="submit"><FastForward /> Advance player</Button>
+          <Button variant={completed ? "danger" : "primary"} busy={adjustment.isPending} type="submit">
+            {completed ? <><RotateCcw /> Reset clue</> : <><Check /> Mark complete</>}
+          </Button>
         </div>
       </form>
     </Modal>
@@ -973,69 +991,6 @@ function ordinal(value: number): string {
   if (lastTwoDigits >= 11 && lastTwoDigits <= 13) return `${value}th`;
   const suffix = value % 10 === 1 ? "st" : value % 10 === 2 ? "nd" : value % 10 === 3 ? "rd" : "th";
   return `${value}${suffix}`;
-}
-
-function ProgressResetEditor({
-  game,
-  entry,
-  onClose,
-}: {
-  game: AdminGameDetail;
-  entry: AdminGameDetail["players"][number];
-  onClose: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const [target, setTarget] = useState("all");
-  const [reason, setReason] = useState("");
-  const reset = useMutation({
-    mutationFn: () =>
-      postJson(
-        `/api/v1/admin/game-players/${entry.membership_id}/progress`,
-        { reason, clue_id: target === "all" ? null : target },
-        "DELETE",
-      ),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin-game", game.id] });
-      onClose();
-    },
-  });
-  const completedClues = game.clues.filter((clue) =>
-    entry.completed_clue_ids.includes(clue.id),
-  );
-  return (
-    <Modal title={`Reset ${entry.user.full_name}`} onClose={onClose}>
-      <form className="modal-form" onSubmit={(event) => { event.preventDefault(); reset.mutate(); }}>
-        <label className="field">
-          <span>Reset target</span>
-          <select value={target} onChange={(event) => setTarget(event.target.value)}>
-            <option value="all">Restart entire game</option>
-            {completedClues.map((clue) => (
-              <option value={clue.id} key={clue.id}>
-                Return to clue {clue.position}: {clue.title}
-              </option>
-            ))}
-          </select>
-          <small>Returning to a clue keeps all clues before it completed.</small>
-        </label>
-        <TextArea
-          label="Reason"
-          name="reset-reason"
-          rows={3}
-          value={reason}
-          onChange={(event) => setReason(event.target.value)}
-          required
-          minLength={3}
-          maxLength={500}
-          hint="Required for the audit log."
-        />
-        <ErrorMessage error={reset.error} />
-        <div className="modal-actions">
-          <Button variant="quiet" type="button" onClick={onClose}>Cancel</Button>
-          <Button variant="danger" busy={reset.isPending} type="submit">Reset progress</Button>
-        </div>
-      </form>
-    </Modal>
-  );
 }
 
 function GameDetailsEditor({ game, onClose, onSaved }: { game: AdminGameDetail; onClose: () => void; onSaved: () => void }) {
