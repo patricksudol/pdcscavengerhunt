@@ -8,6 +8,7 @@ from sqlalchemy import select
 from pdcscavengerhunt.models import (
     AuditEvent,
     Clue,
+    ClueAnswerReveal,
     ClueCompletion,
     Game,
     GamePlayer,
@@ -45,6 +46,7 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
     )
     assert created.status == 201
     assert created.json["closing_message"] == "Thanks for playing!"
+    assert created.json["allow_answer_reveal"] is False
     game_id = created.json["id"]
 
     _request, membership = await app.asgi_client.put(
@@ -121,28 +123,23 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
         "UNIQUE-ONE",
         "UNIQUE-TWO",
     }
-    configured_clue = next(
-        clue for clue in detail.json["clues"] if clue["id"] == clue_ids[0]
-    )
-    assert [hint["id"] for hint in configured_clue["hints"]] == list(
-        reversed(hint_ids)
-    )
+    configured_clue = next(clue for clue in detail.json["clues"] if clue["id"] == clue_ids[0])
+    assert [hint["id"] for hint in configured_clue["hints"]] == list(reversed(hint_ids))
     assert configured_clue["hints"][1]["text"] == "Begin beside the clock."
 
     _request, opened = await app.asgi_client.patch(
         f"/api/v1/admin/games/{game_id}",
-        json={"status": "open"},
+        json={"status": "open", "allow_answer_reveal": True},
         cookies=cookies,
         headers=headers,
     )
     assert opened.status == 200
     assert opened.json["status"] == "open"
+    assert opened.json["allow_answer_reveal"] is True
 
     async with app.ctx.db.session() as db:
         game = await db.get(Game, UUID(game_id))
-        membership_row = await db.scalar(
-            select(GamePlayer).where(GamePlayer.game_id == game.id)
-        )
+        membership_row = await db.scalar(select(GamePlayer).where(GamePlayer.game_id == game.id))
         clues = list(
             (
                 await db.scalars(
@@ -153,6 +150,7 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
         actions = set((await db.scalars(select(AuditEvent.action))).all())
         assert membership_row.user_id == player.id
         assert game.closing_message == "Thanks for playing!"
+        assert game.allow_answer_reveal is True
         assert [str(clue.id) for clue in clues] == list(reversed(clue_ids))
         expected_actions = {
             "game.created",
@@ -234,9 +232,7 @@ async def test_admin_can_permanently_delete_user_and_their_progress(app, admin):
         assert await db.get(GamePlayer, membership_id) is None
         assert await db.get(ClueCompletion, completion_id) is None
         assert await db.get(PasswordSetupToken, token_id) is None
-        event = await db.scalar(
-            select(AuditEvent).where(AuditEvent.action == "user.deleted")
-        )
+        event = await db.scalar(select(AuditEvent).where(AuditEvent.action == "user.deleted"))
         assert event
         assert event.actor_id == admin.id
         assert event.entity_id == str(player_id)
@@ -330,10 +326,7 @@ async def test_admin_ranks_every_finisher_by_final_completion_time(app, admin):
         ]
         db.add_all([clue, *players])
         await db.flush()
-        memberships = [
-            GamePlayer(game_id=game.id, user_id=player.id)
-            for player in players
-        ]
+        memberships = [GamePlayer(game_id=game.id, user_id=player.id) for player in players]
         db.add_all(memberships)
         await db.flush()
         finish_minutes = [40, 10, 30, 20]
@@ -364,10 +357,7 @@ async def test_admin_ranks_every_finisher_by_final_completion_time(app, admin):
     progress_by_email = {
         entry["user"]["email_address"]: entry for entry in response.json["players"]
     }
-    assert {
-        email: entry["completion_rank"]
-        for email, entry in progress_by_email.items()
-    } == {
+    assert {email: entry["completion_rank"] for email, entry in progress_by_email.items()} == {
         "rank-1@example.com": 4,
         "rank-2@example.com": 1,
         "rank-3@example.com": 3,
@@ -475,9 +465,15 @@ async def test_admin_can_page_through_audit_events(app, admin):
 
 async def test_audit_events_include_the_related_game(app, admin):
     async with app.ctx.db.session() as db:
+        player = User(
+            email_address="audited-player@example.com",
+            normalized_email_address="audited-player@example.com",
+            full_name="Audited Player",
+        )
         game = Game(title="Audited Hunt", status="open")
-        db.add(game)
+        db.add_all([player, game])
         await db.flush()
+        membership = GamePlayer(game_id=game.id, user_id=player.id)
         clue = Clue(
             game_id=game.id,
             position=1,
@@ -485,7 +481,7 @@ async def test_audit_events_include_the_related_game(app, admin):
             content="Find it",
             code_fingerprint=fingerprint_code("AUDIT", app.ctx.settings),
         )
-        db.add(clue)
+        db.add_all([membership, clue])
         await db.flush()
         hint = Hint(clue_id=clue.id, position=1, text="Look nearby")
         db.add(hint)
@@ -510,19 +506,50 @@ async def test_audit_events_include_the_related_game(app, admin):
                     entity_type="hint",
                     entity_id=str(hint.id),
                 ),
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="player.progress_reset",
+                    entity_type="game_player",
+                    entity_id=str(membership.id),
+                    after={
+                        "game_id": str(game.id),
+                        "user_id": str(player.id),
+                    },
+                ),
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="user.updated",
+                    entity_type="user",
+                    entity_id=str(player.id),
+                ),
             ]
         )
         expected_game = {"id": str(game.id), "title": game.title}
         other_game = Game(title="Other Hunt", status="open")
         db.add(other_game)
         await db.flush()
-        db.add(
-            AuditEvent(
-                actor_id=admin.id,
-                action="game.updated",
-                entity_type="game",
-                entity_id=str(other_game.id),
-            )
+        other_membership = GamePlayer(game_id=other_game.id, user_id=player.id)
+        db.add(other_membership)
+        await db.flush()
+        db.add_all(
+            [
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="game.updated",
+                    entity_type="game",
+                    entity_id=str(other_game.id),
+                ),
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="player.progress_advanced",
+                    entity_type="game_player",
+                    entity_id=str(other_membership.id),
+                    after={
+                        "game_id": str(other_game.id),
+                        "user_id": str(player.id),
+                    },
+                ),
+            ]
         )
 
     cookies, headers = auth(app, admin)
@@ -533,10 +560,9 @@ async def test_audit_events_include_the_related_game(app, admin):
     )
 
     assert response.status == 200
-    by_action = {item["action"]: item for item in response.json["items"]}
-    assert by_action["game.updated"]["game"] == expected_game
-    assert by_action["clue.updated"]["game"] == expected_game
-    assert by_action["hint.updated"]["game"] == expected_game
+    assert response.json["total"] == 1
+    assert response.json["items"][0]["action"] == "user.updated"
+    assert response.json["items"][0]["game"] is None
 
     _request, filtered = await app.asgi_client.get(
         f"/api/v1/admin/audit-events?game_id={game.id}",
@@ -544,10 +570,14 @@ async def test_audit_events_include_the_related_game(app, admin):
         headers=headers,
     )
     assert filtered.status == 200
-    assert filtered.json["total"] == 3
-    assert {
-        item["entity_id"] for item in filtered.json["items"]
-    } == {str(game.id), str(clue.id), str(hint.id)}
+    assert filtered.json["total"] == 4
+    assert {item["entity_id"] for item in filtered.json["items"]} == {
+        str(game.id),
+        str(clue.id),
+        str(hint.id),
+        str(membership.id),
+    }
+    assert all(item["game"] == expected_game for item in filtered.json["items"])
 
 
 async def test_non_admin_cannot_read_audit_events(app, admin):
@@ -599,6 +629,10 @@ async def test_admin_can_reset_player_progress_with_reason(app, admin):
                     clue_id=clue.id,
                 ),
                 HintReveal(game_player_id=membership.id, hint_id=hint.id),
+                ClueAnswerReveal(
+                    game_player_id=membership.id,
+                    clue_id=clue.id,
+                ),
             ]
         )
         membership_id = membership.id
@@ -616,6 +650,7 @@ async def test_admin_can_reset_player_progress_with_reason(app, admin):
     async with app.ctx.db.session() as db:
         assert await db.scalar(select(ClueCompletion)) is None
         assert await db.scalar(select(HintReveal)) is None
+        assert await db.scalar(select(ClueAnswerReveal)) is None
         event = await db.scalar(
             select(AuditEvent).where(AuditEvent.action == "player.progress_reset")
         )
@@ -640,9 +675,7 @@ async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
                 position=position,
                 title=f"Clue {position}",
                 content=f"Answer {position}",
-                code_fingerprint=fingerprint_code(
-                    f"TARGET-{position}", app.ctx.settings
-                ),
+                code_fingerprint=fingerprint_code(f"TARGET-{position}", app.ctx.settings),
             )
             for position in range(1, 4)
         ]
@@ -662,10 +695,7 @@ async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
                 )
                 for clue in clues
             ]
-            + [
-                HintReveal(game_player_id=membership.id, hint_id=hint.id)
-                for hint in hints
-            ]
+            + [HintReveal(game_player_id=membership.id, hint_id=hint.id) for hint in hints]
         )
         membership_id = membership.id
         target_clue_id = clues[1].id
@@ -701,9 +731,7 @@ async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
         remaining_hint_ids = set(
             (
                 await db.scalars(
-                    select(HintReveal.hint_id).where(
-                        HintReveal.game_player_id == membership_id
-                    )
+                    select(HintReveal.hint_id).where(HintReveal.game_player_id == membership_id)
                 )
             ).all()
         )
@@ -793,13 +821,9 @@ async def test_admin_can_advance_player_progress_to_a_later_clue(app, admin):
                 )
             ).all()
         )
-        assert {completion.clue_id for completion in completions} == {
-            clue.id for clue in clues[:3]
-        }
+        assert {completion.clue_id for completion in completions} == {clue.id for clue in clues[:3]}
         original = next(
-            completion
-            for completion in completions
-            if completion.clue_id == clues[0].id
+            completion for completion in completions if completion.clue_id == clues[0].id
         )
         stored_original_time = (
             original.completed_at

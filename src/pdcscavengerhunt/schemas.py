@@ -33,6 +33,7 @@ class GameCreate(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
     instructions: str | None = Field(default=None, max_length=5000)
     closing_message: str | None = Field(default=None, max_length=5000)
+    allow_answer_reveal: bool = False
 
 
 class GameUpdate(BaseModel):
@@ -40,6 +41,7 @@ class GameUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=5000)
     instructions: str | None = Field(default=None, max_length=5000)
     closing_message: str | None = Field(default=None, max_length=5000)
+    allow_answer_reveal: bool = False
     status: GameStatus | None = None
 
 

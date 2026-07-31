@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 from sanic import Blueprint, Request
 from sanic.exceptions import InvalidUsage, NotFound, SanicException
 from sanic.log import logger
-from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 
 from .auth import setup_token_hash
 from .cloudflare_media import MediaProviderError
@@ -16,6 +16,7 @@ from .media_status import refresh_processing_videos
 from .models import (
     AuditEvent,
     Clue,
+    ClueAnswerReveal,
     ClueCompletion,
     ClueMedia,
     Game,
@@ -62,6 +63,19 @@ MEDIA_CONTENT_TYPES = {
         "video/quicktime": ".mov",
     },
 }
+
+GAME_AUDIT_ENTITY_TYPES = ("game", "clue", "hint", "game_player")
+
+
+def general_audit_filter():
+    """Limit the Players audit trail to activity outside a specific game."""
+    return and_(
+        AuditEvent.entity_type.not_in(GAME_AUDIT_ENTITY_TYPES),
+        func.coalesce(AuditEvent.after["game_id"].as_string(), "") == "",
+        func.coalesce(AuditEvent.before["game_id"].as_string(), "") == "",
+        func.coalesce(AuditEvent.after["clue_id"].as_string(), "") == "",
+        func.coalesce(AuditEvent.before["clue_id"].as_string(), "") == "",
+    )
 
 
 def audit(
@@ -175,16 +189,8 @@ def hint_json(hint: Hint, media: list[HintMedia] | None = None) -> dict:
         "id": str(hint.id),
         "position": hint.position,
         "text": hint.text,
-        "photo": (
-            media_json(by_type[MediaType.photo])
-            if MediaType.photo in by_type
-            else None
-        ),
-        "video": (
-            media_json(by_type[MediaType.video])
-            if MediaType.video in by_type
-            else None
-        ),
+        "photo": (media_json(by_type[MediaType.photo]) if MediaType.photo in by_type else None),
+        "video": (media_json(by_type[MediaType.video]) if MediaType.video in by_type else None),
     }
 
 
@@ -201,16 +207,8 @@ def clue_json(
         "content": clue.content,
         "code": clue.code,
         "code_set": True,
-        "photo": (
-            media_json(by_type[MediaType.photo])
-            if MediaType.photo in by_type
-            else None
-        ),
-        "video": (
-            media_json(by_type[MediaType.video])
-            if MediaType.video in by_type
-            else None
-        ),
+        "photo": (media_json(by_type[MediaType.photo]) if MediaType.photo in by_type else None),
+        "video": (media_json(by_type[MediaType.video]) if MediaType.video in by_type else None),
         "hints": hints or [],
     }
 
@@ -238,11 +236,7 @@ def valid_media_signature(media_type: MediaType, content_type: str, prefix: byte
     if content_type == "image/png":
         return prefix.startswith(b"\x89PNG\r\n\x1a\n")
     if content_type == "image/webp":
-        return (
-            len(prefix) >= 12
-            and prefix.startswith(b"RIFF")
-            and prefix[8:12] == b"WEBP"
-        )
+        return len(prefix) >= 12 and prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP"
     return False
 
 
@@ -275,6 +269,7 @@ def game_json(
         "description": game.description,
         "instructions": game.instructions,
         "closing_message": game.closing_message,
+        "allow_answer_reveal": game.allow_answer_reveal,
         "status": game.status.value,
         "player_count": player_count,
         "clue_count": clue_count,
@@ -312,9 +307,7 @@ async def dashboard(request: Request):
     async with request.app.ctx.db.session() as db:
         users = await db.scalar(select(func.count(User.id)).where(User.active.is_(True)))
         games = await db.scalar(select(func.count(Game.id)))
-        open_games = await db.scalar(
-            select(func.count(Game.id)).where(Game.status == "open")
-        )
+        open_games = await db.scalar(select(func.count(Game.id)).where(Game.status == "open"))
         completions = await db.scalar(select(func.count(ClueCompletion.id)))
         return {
             "users": users or 0,
@@ -377,72 +370,57 @@ async def list_audit_events(request: Request):
                     )
                 ).all()
             ]
+            membership_ids = [
+                str(membership_id)
+                for membership_id in (
+                    await db.scalars(select(GamePlayer.id).where(GamePlayer.game_id == game_id))
+                ).all()
+            ]
             game_id_text = str(game_id)
             game_filter = or_(
-                (AuditEvent.entity_type == "game")
-                & (AuditEvent.entity_id == game_id_text),
+                (AuditEvent.entity_type == "game") & (AuditEvent.entity_id == game_id_text),
+                (AuditEvent.entity_type == "game_player")
+                & AuditEvent.entity_id.in_(membership_ids),
                 AuditEvent.after["game_id"].as_string() == game_id_text,
                 AuditEvent.before["game_id"].as_string() == game_id_text,
-                (AuditEvent.entity_type == "clue")
-                & AuditEvent.entity_id.in_(clue_ids),
-                (AuditEvent.entity_type == "hint")
-                & AuditEvent.entity_id.in_(hint_ids),
+                (AuditEvent.entity_type == "clue") & AuditEvent.entity_id.in_(clue_ids),
+                (AuditEvent.entity_type == "hint") & AuditEvent.entity_id.in_(hint_ids),
                 AuditEvent.after["clue_id"].as_string().in_(clue_ids),
                 AuditEvent.before["clue_id"].as_string().in_(clue_ids),
             )
 
-        count_query = select(func.count(AuditEvent.id))
-        if game_filter is not None:
-            count_query = count_query.where(game_filter)
+        audit_filter = game_filter if game_filter is not None else general_audit_filter()
+        count_query = select(func.count(AuditEvent.id)).where(audit_filter)
         total = await db.scalar(count_query) or 0
         events_query = (
             select(AuditEvent, User)
             .outerjoin(User, User.id == AuditEvent.actor_id)
+            .where(audit_filter)
             .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
             .offset(offset)
             .limit(limit)
         )
-        if game_filter is not None:
-            events_query = events_query.where(game_filter)
-        rows = (
-            await db.execute(events_query)
-        ).all()
+        rows = (await db.execute(events_query)).all()
         subject_ids = {
-            subject_id
-            for event, _actor in rows
-            if (subject_id := audit_subject_id(event))
+            subject_id for event, _actor in rows if (subject_id := audit_subject_id(event))
         }
         subjects = (
             {
                 user.id: user
-                for user in (
-                    await db.scalars(select(User).where(User.id.in_(subject_ids)))
-                ).all()
+                for user in (await db.scalars(select(User).where(User.id.in_(subject_ids)))).all()
             }
             if subject_ids
             else {}
         )
-        clue_ids = {
-            clue_id
-            for event, _actor in rows
-            if (clue_id := audit_clue_id(event))
-        }
+        clue_ids = {clue_id for event, _actor in rows if (clue_id := audit_clue_id(event))}
         clue_game_ids = (
             dict(
-                (
-                    await db.execute(
-                        select(Clue.id, Clue.game_id).where(Clue.id.in_(clue_ids))
-                    )
-                ).all()
+                (await db.execute(select(Clue.id, Clue.game_id).where(Clue.id.in_(clue_ids)))).all()
             )
             if clue_ids
             else {}
         )
-        hint_ids = {
-            hint_id
-            for event, _actor in rows
-            if (hint_id := audit_hint_id(event))
-        }
+        hint_ids = {hint_id for event, _actor in rows if (hint_id := audit_hint_id(event))}
         hint_game_ids = (
             dict(
                 (
@@ -468,9 +446,7 @@ async def list_audit_events(request: Request):
         games = (
             {
                 game.id: game
-                for game in (
-                    await db.scalars(select(Game).where(Game.id.in_(game_ids)))
-                ).all()
+                for game in (await db.scalars(select(Game).where(Game.id.in_(game_ids)))).all()
             }
             if game_ids
             else {}
@@ -518,9 +494,7 @@ async def create_user(request: Request):
     payload = UserCreate.model_validate(request.json or {})
     normalized = normalize_email_address(str(payload.email_address))
     async with request.app.ctx.db.session() as db:
-        if await db.scalar(
-            select(User.id).where(User.normalized_email_address == normalized)
-        ):
+        if await db.scalar(select(User.id).where(User.normalized_email_address == normalized)):
             raise SanicException("That email address is already in use", status_code=409)
         user = User(
             email_address=str(payload.email_address).strip(),
@@ -556,13 +530,13 @@ async def update_user(request: Request, user_id: UUID):
             changes.get("active") is False or changes.get("is_admin") is False
         ):
             raise InvalidUsage("You cannot remove your own administrator access")
-        if user.is_admin and user.active and (
-            changes.get("active") is False or changes.get("is_admin") is False
+        if (
+            user.is_admin
+            and user.active
+            and (changes.get("active") is False or changes.get("is_admin") is False)
         ):
             admin_count = await db.scalar(
-                select(func.count(User.id)).where(
-                    User.is_admin.is_(True), User.active.is_(True)
-                )
+                select(func.count(User.id)).where(User.is_admin.is_(True), User.active.is_(True))
             )
             if (admin_count or 0) <= 1:
                 raise InvalidUsage("At least one active administrator is required")
@@ -586,11 +560,7 @@ async def update_user(request: Request, user_id: UUID):
             if key == "full_name" and value is not None:
                 value = value.strip()
             setattr(user, key, value)
-        if (
-            email_address
-            or "active" in changes
-            or "is_admin" in changes
-        ):
+        if email_address or "active" in changes or "is_admin" in changes:
             user.session_version += 1
         await db.flush()
         after = user_json(user)
@@ -636,14 +606,10 @@ async def delete_user(request: Request, user_id: UUID):
             .where(PasswordSetupToken.created_by_id == user.id)
             .values(created_by_id=None)
         )
-        await db.execute(
-            delete(PasswordSetupToken).where(PasswordSetupToken.user_id == user.id)
-        )
+        await db.execute(delete(PasswordSetupToken).where(PasswordSetupToken.user_id == user.id))
         membership_ids = select(GamePlayer.id).where(GamePlayer.user_id == user.id)
         await db.execute(
-            delete(ClueCompletion).where(
-                ClueCompletion.game_player_id.in_(membership_ids)
-            )
+            delete(ClueCompletion).where(ClueCompletion.game_player_id.in_(membership_ids))
         )
         await db.execute(delete(GamePlayer).where(GamePlayer.user_id == user.id))
         await db.execute(
@@ -652,19 +618,13 @@ async def delete_user(request: Request, user_id: UUID):
             .values(assigned_by_id=None)
         )
         await db.execute(
-            update(Game)
-            .where(Game.created_by_id == user.id)
-            .values(created_by_id=None)
+            update(Game).where(Game.created_by_id == user.id).values(created_by_id=None)
         )
         await db.execute(
-            update(ClueMedia)
-            .where(ClueMedia.created_by_id == user.id)
-            .values(created_by_id=None)
+            update(ClueMedia).where(ClueMedia.created_by_id == user.id).values(created_by_id=None)
         )
         await db.execute(
-            update(AuditEvent)
-            .where(AuditEvent.actor_id == user.id)
-            .values(actor_id=None)
+            update(AuditEvent).where(AuditEvent.actor_id == user.id).values(actor_id=None)
         )
         await db.execute(delete(User).where(User.id == user.id))
         return {"deleted": True}
@@ -693,17 +653,13 @@ async def regenerate_setup_link(request: Request, user_id: UUID):
 @login_required(admin=True)
 async def list_games(request: Request):
     async with request.app.ctx.db.session() as db:
-        games = list(
-            (await db.scalars(select(Game).order_by(Game.created_at.desc()))).all()
-        )
+        games = list((await db.scalars(select(Game).order_by(Game.created_at.desc()))).all())
         result = []
         for game in games:
             player_count = await db.scalar(
                 select(func.count(GamePlayer.id)).where(GamePlayer.game_id == game.id)
             )
-            clue_count = await db.scalar(
-                select(func.count(Clue.id)).where(Clue.game_id == game.id)
-            )
+            clue_count = await db.scalar(select(func.count(Clue.id)).where(Clue.game_id == game.id))
             completion_count = await db.scalar(
                 select(func.count(ClueCompletion.id))
                 .join(Clue, Clue.id == ClueCompletion.clue_id)
@@ -730,6 +686,7 @@ async def create_game(request: Request):
             description=payload.description,
             instructions=payload.instructions,
             closing_message=payload.closing_message,
+            allow_answer_reveal=payload.allow_answer_reveal,
             created_by_id=request.ctx.user.id,
         )
         db.add(game)
@@ -763,9 +720,7 @@ async def get_game(request: Request, game_id: UUID):
         clue_media = list(
             (
                 await db.scalars(
-                    select(ClueMedia).where(
-                        ClueMedia.clue_id.in_([clue.id for clue in clues])
-                    )
+                    select(ClueMedia).where(ClueMedia.clue_id.in_([clue.id for clue in clues]))
                 )
             ).all()
         )
@@ -785,9 +740,7 @@ async def get_game(request: Request, game_id: UUID):
         hint_media = list(
             (
                 await db.scalars(
-                    select(HintMedia).where(
-                        HintMedia.hint_id.in_([hint.id for hint in hints])
-                    )
+                    select(HintMedia).where(HintMedia.hint_id.in_([hint.id for hint in hints]))
                 )
             ).all()
         )
@@ -833,9 +786,7 @@ async def get_game(request: Request, game_id: UUID):
                 }
                 for clue_id, completed_at in completion_rows
             ]
-            completed_clue_ids = [
-                completion["clue_id"] for completion in completions
-            ]
+            completed_clue_ids = [completion["clue_id"] for completion in completions]
             finished_at = (
                 completions[-1]["completed_at"]
                 if clues and len(completions) == len(clues)
@@ -939,11 +890,7 @@ async def replace_players(request: Request, game_id: UUID):
         if valid_ids != user_ids:
             raise InvalidUsage("Only active users can be assigned")
         memberships = list(
-            (
-                await db.scalars(
-                    select(GamePlayer).where(GamePlayer.game_id == game.id)
-                )
-            ).all()
+            (await db.scalars(select(GamePlayer).where(GamePlayer.game_id == game.id))).all()
         )
         existing = {membership.user_id: membership for membership in memberships}
         for removed_id in existing.keys() - user_ids:
@@ -1044,11 +991,7 @@ async def update_clue(request: Request, clue_id: UUID):
             )
         )
         clue_media = list(
-            (
-                await db.scalars(
-                    select(ClueMedia).where(ClueMedia.clue_id == clue.id)
-                )
-            ).all()
+            (await db.scalars(select(ClueMedia).where(ClueMedia.clue_id == clue.id))).all()
         )
         hints = list(
             (
@@ -1060,9 +1003,7 @@ async def update_clue(request: Request, clue_id: UUID):
         hint_media = list(
             (
                 await db.scalars(
-                    select(HintMedia).where(
-                        HintMedia.hint_id.in_([hint.id for hint in hints])
-                    )
+                    select(HintMedia).where(HintMedia.hint_id.in_([hint.id for hint in hints]))
                 )
             ).all()
         )
@@ -1121,11 +1062,7 @@ async def update_hint(request: Request, hint_id: UUID):
             raise NotFound("Hint not found")
         before = {"text": hint.text}
         if "text" in payload.model_fields_set:
-            hint.text = (
-                payload.text.strip()
-                if payload.text and payload.text.strip()
-                else None
-            )
+            hint.text = payload.text.strip() if payload.text and payload.text.strip() else None
         await db.flush()
         db.add(
             audit(
@@ -1138,11 +1075,7 @@ async def update_hint(request: Request, hint_id: UUID):
             )
         )
         media = list(
-            (
-                await db.scalars(
-                    select(HintMedia).where(HintMedia.hint_id == hint.id)
-                )
-            ).all()
+            (await db.scalars(select(HintMedia).where(HintMedia.hint_id == hint.id))).all()
         )
         return hint_json(hint, media)
 
@@ -1274,16 +1207,17 @@ async def upload_clue_media(
             status_code=413,
         )
     if not valid_media_signature(selected_type, content_type, content[:32]):
-        raise InvalidUsage(
-            f"The uploaded file content is not a valid {selected_type.value}"
-        )
+        raise InvalidUsage(f"The uploaded file content is not a valid {selected_type.value}")
 
     supplied_name = unquote(request.headers.get("x-file-name", ""))
-    original_filename = "".join(
-        character
-        for character in supplied_name.replace("\\", "/").rsplit("/", 1)[-1]
-        if ord(character) >= 32
-    )[:255] or f"clue-{selected_type.value}{extension}"
+    original_filename = (
+        "".join(
+            character
+            for character in supplied_name.replace("\\", "/").rsplit("/", 1)[-1]
+            if ord(character) >= 32
+        )[:255]
+        or f"clue-{selected_type.value}{extension}"
+    )
 
     async with request.app.ctx.db.session() as db:
         if not await db.get(Clue, clue_id):
@@ -1322,8 +1256,7 @@ async def upload_clue_media(
             status = video.status
     except MediaProviderError as error:
         logger.exception(
-            "event=media_upload_failed request_id=%s clue_id=%s media_type=%s "
-            "size_bytes=%s",
+            "event=media_upload_failed request_id=%s clue_id=%s media_type=%s size_bytes=%s",
             request.ctx.request_id,
             clue_id,
             selected_type.value,
@@ -1336,9 +1269,7 @@ async def upload_clue_media(
     created = False
     try:
         async with request.app.ctx.db.session() as db:
-            clue = await db.scalar(
-                select(Clue).where(Clue.id == clue_id).with_for_update()
-            )
+            clue = await db.scalar(select(Clue).where(Clue.id == clue_id).with_for_update())
             if not clue:
                 raise NotFound("Clue not found")
             media = await db.scalar(
@@ -1375,9 +1306,7 @@ async def upload_clue_media(
             db.add(
                 audit(
                     request,
-                    action=(
-                        "clue.media_attached" if created else "clue.media_replaced"
-                    ),
+                    action=("clue.media_attached" if created else "clue.media_replaced"),
                     entity_type="clue",
                     entity_id=str(clue.id),
                     before=before,
@@ -1439,8 +1368,7 @@ async def delete_clue_media(request: Request, clue_id: UUID, media_type: str):
         )
     await delete_provider_media(request, selected_type, provider_key)
     logger.info(
-        "event=media_removed request_id=%s clue_id=%s media_id=%s "
-        "media_type=%s actor_id=%s",
+        "event=media_removed request_id=%s clue_id=%s media_id=%s media_type=%s actor_id=%s",
         request.ctx.request_id,
         clue_id,
         media.id,
@@ -1482,16 +1410,17 @@ async def upload_hint_media(
             status_code=413,
         )
     if not valid_media_signature(selected_type, content_type, content[:32]):
-        raise InvalidUsage(
-            f"The uploaded file content is not a valid {selected_type.value}"
-        )
+        raise InvalidUsage(f"The uploaded file content is not a valid {selected_type.value}")
 
     supplied_name = unquote(request.headers.get("x-file-name", ""))
-    original_filename = "".join(
-        character
-        for character in supplied_name.replace("\\", "/").rsplit("/", 1)[-1]
-        if ord(character) >= 32
-    )[:255] or f"hint-{selected_type.value}{extension}"
+    original_filename = (
+        "".join(
+            character
+            for character in supplied_name.replace("\\", "/").rsplit("/", 1)[-1]
+            if ord(character) >= 32
+        )[:255]
+        or f"hint-{selected_type.value}{extension}"
+    )
 
     async with request.app.ctx.db.session() as db:
         if not await db.get(Hint, hint_id):
@@ -1530,8 +1459,7 @@ async def upload_hint_media(
             status = video.status
     except MediaProviderError as error:
         logger.exception(
-            "event=hint_media_upload_failed request_id=%s hint_id=%s "
-            "media_type=%s size_bytes=%s",
+            "event=hint_media_upload_failed request_id=%s hint_id=%s media_type=%s size_bytes=%s",
             request.ctx.request_id,
             hint_id,
             selected_type.value,
@@ -1544,9 +1472,7 @@ async def upload_hint_media(
     created = False
     try:
         async with request.app.ctx.db.session() as db:
-            hint = await db.scalar(
-                select(Hint).where(Hint.id == hint_id).with_for_update()
-            )
+            hint = await db.scalar(select(Hint).where(Hint.id == hint_id).with_for_update())
             if not hint:
                 raise NotFound("Hint not found")
             media = await db.scalar(
@@ -1583,9 +1509,7 @@ async def upload_hint_media(
             db.add(
                 audit(
                     request,
-                    action=(
-                        "hint.media_attached" if created else "hint.media_replaced"
-                    ),
+                    action=("hint.media_attached" if created else "hint.media_replaced"),
                     entity_type="hint",
                     entity_id=str(hint.id),
                     before=before,
@@ -1797,6 +1721,15 @@ async def reset_progress(request: Request, membership_id: UUID):
                 )
             )
         await db.execute(delete(HintReveal).where(hint_reveal_filter))
+        answer_reveal_filter = ClueAnswerReveal.game_player_id == membership.id
+        if target_clue:
+            answer_reveal_filter = answer_reveal_filter & ClueAnswerReveal.clue_id.in_(
+                select(Clue.id).where(
+                    Clue.game_id == membership.game_id,
+                    Clue.position >= target_clue.position,
+                )
+            )
+        await db.execute(delete(ClueAnswerReveal).where(answer_reveal_filter))
         await db.flush()
         remaining_count = (
             await db.scalar(
@@ -1836,27 +1769,19 @@ async def advance_progress(request: Request, membership_id: UUID):
     payload = ProgressAdvance.model_validate(request.json or {})
     async with request.app.ctx.db.session() as db:
         membership = await db.scalar(
-            select(GamePlayer)
-            .where(GamePlayer.id == membership_id)
-            .with_for_update()
+            select(GamePlayer).where(GamePlayer.id == membership_id).with_for_update()
         )
         if not membership:
             raise NotFound("Game assignment not found")
         clues = list(
             (
                 await db.scalars(
-                    select(Clue)
-                    .where(Clue.game_id == membership.game_id)
-                    .order_by(Clue.position)
+                    select(Clue).where(Clue.game_id == membership.game_id).order_by(Clue.position)
                 )
             ).all()
         )
         target_index = next(
-            (
-                index
-                for index, clue in enumerate(clues)
-                if clue.id == payload.clue_id
-            ),
+            (index for index, clue in enumerate(clues) if clue.id == payload.clue_id),
             None,
         )
         if target_index is None:
@@ -1871,22 +1796,14 @@ async def advance_progress(request: Request, membership_id: UUID):
             ).all()
         )
         first_incomplete = next(
-            (
-                index
-                for index, clue in enumerate(clues)
-                if clue.id not in completed_ids
-            ),
+            (index for index, clue in enumerate(clues) if clue.id not in completed_ids),
             len(clues),
         )
         if target_index <= first_incomplete:
             raise InvalidUsage("Choose a clue after the player's current clue")
 
         now = datetime.now(UTC)
-        added_clues = [
-            clue
-            for clue in clues[:target_index]
-            if clue.id not in completed_ids
-        ]
+        added_clues = [clue for clue in clues[:target_index] if clue.id not in completed_ids]
         db.add_all(
             [
                 ClueCompletion(

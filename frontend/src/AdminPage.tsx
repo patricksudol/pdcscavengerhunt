@@ -265,6 +265,7 @@ const auditActionLabels: Record<string, string> = {
   "auth.password_changed": "Changed password",
   "clue.code_rejected": "Tried an incorrect clue code",
   "clue.completed": "Completed a clue",
+  "clue.answer_revealed": "Revealed a clue answer",
   "user.created": "Created a player",
   "user.seeded": "Created the initial administrator",
   "user.updated": "Updated a player",
@@ -311,7 +312,11 @@ function changedFields(event: AuditEvent) {
 function auditSummary(event: AuditEvent) {
   if (event.reason) return event.reason;
   const after = event.after;
-  if (event.action === "clue.completed" && typeof after?.position === "number") {
+  if (
+    (event.action === "clue.completed" ||
+      event.action === "clue.answer_revealed") &&
+    typeof after?.position === "number"
+  ) {
     return `Clue ${after.position}`;
   }
   if (event.action === "hint.revealed" && typeof after?.position === "number") {
@@ -389,7 +394,7 @@ function AuditLog({ gameId }: { gameId?: string }) {
   const pageSize = 50;
   const [offset, setOffset] = useState(0);
   const events = useQuery({
-    queryKey: ["admin-audit-events", gameId ?? "all", offset],
+    queryKey: ["admin-audit-events", gameId ?? "general", offset],
     queryFn: () =>
       api<AuditEventPage>(
         `/api/v1/admin/audit-events?limit=${pageSize}&offset=${offset}${
@@ -408,7 +413,7 @@ function AuditLog({ gameId }: { gameId?: string }) {
           <p>
             {gameId
               ? "Player activity and administrative changes for this game."
-              : "Logins, password activity, clue attempts, and administrative changes."}
+              : "Account, login, password, and other activity outside a specific game."}
           </p>
         </div>
         {events.data && <span>{events.data.total} event{events.data.total === 1 ? "" : "s"}</span>}
@@ -531,12 +536,14 @@ function CreateGame({ onClose, onCreated }: { onClose: () => void; onCreated: (g
   const [description, setDescription] = useState("");
   const [instructions, setInstructions] = useState("");
   const [closingMessage, setClosingMessage] = useState("");
+  const [allowAnswerReveal, setAllowAnswerReveal] = useState(false);
   const create = useMutation({
     mutationFn: () => postJson<AdminGame>("/api/v1/admin/games", {
       title,
       description: description || null,
       instructions: instructions || null,
       closing_message: closingMessage || null,
+      allow_answer_reveal: allowAnswerReveal,
     }),
     onSuccess: onCreated,
   });
@@ -547,6 +554,17 @@ function CreateGame({ onClose, onCreated }: { onClose: () => void; onCreated: (g
         <TextArea label="Description" name="description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
         <TextArea label="Player instructions" name="instructions" rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
         <TextArea label="Closing message" name="closing-message" rows={3} value={closingMessage} onChange={(event) => setClosingMessage(event.target.value)} hint="Shown after a player solves the final clue." />
+        <label className="check-field">
+          <input
+            type="checkbox"
+            checked={allowAnswerReveal}
+            onChange={(event) => setAllowAnswerReveal(event.target.checked)}
+          />
+          <span>
+            <strong>Allow answer reveals</strong>
+            <small>After revealing every hint—or immediately when there are no hints—a player may reveal the answer. They must still enter the clue code to complete it.</small>
+          </span>
+        </label>
         <ErrorMessage error={create.error} />
         <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={create.isPending} type="submit">Create game</Button></div>
       </form>
@@ -1025,12 +1043,14 @@ function GameDetailsEditor({ game, onClose, onSaved }: { game: AdminGameDetail; 
   const [description, setDescription] = useState(game.description ?? "");
   const [instructions, setInstructions] = useState(game.instructions ?? "");
   const [closingMessage, setClosingMessage] = useState(game.closing_message ?? "");
+  const [allowAnswerReveal, setAllowAnswerReveal] = useState(game.allow_answer_reveal);
   const save = useMutation({
     mutationFn: () => postJson(`/api/v1/admin/games/${game.id}`, {
       title,
       description: description || null,
       instructions: instructions || null,
       closing_message: closingMessage || null,
+      allow_answer_reveal: allowAnswerReveal,
     }, "PATCH"),
     onSuccess: onSaved,
   });
@@ -1041,6 +1061,17 @@ function GameDetailsEditor({ game, onClose, onSaved }: { game: AdminGameDetail; 
         <TextArea label="Description" name="edit-game-description" rows={3} value={description} onChange={(event) => setDescription(event.target.value)} />
         <TextArea label="Player instructions" name="edit-game-instructions" rows={3} value={instructions} onChange={(event) => setInstructions(event.target.value)} />
         <TextArea label="Closing message" name="edit-game-closing-message" rows={3} value={closingMessage} onChange={(event) => setClosingMessage(event.target.value)} hint="Shown after a player solves the final clue." />
+        <label className="check-field">
+          <input
+            type="checkbox"
+            checked={allowAnswerReveal}
+            onChange={(event) => setAllowAnswerReveal(event.target.checked)}
+          />
+          <span>
+            <strong>Allow answer reveals</strong>
+            <small>Players can reveal an answer after using all available hints, but must still submit the clue code.</small>
+          </span>
+        </label>
         <ErrorMessage error={save.error} />
         <div className="modal-actions"><Button variant="quiet" type="button" onClick={onClose}>Cancel</Button><Button busy={save.isPending} type="submit">Save details</Button></div>
       </form>

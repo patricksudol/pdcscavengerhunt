@@ -22,6 +22,7 @@ describe("clue detail card", () => {
           position: 2,
           status: "available",
           clue: "Look beneath the town clock",
+          can_reveal_answer: false,
           hints: [],
         }}
         clueCount={5}
@@ -31,9 +32,12 @@ describe("clue detail card", () => {
         error={null}
         hintBusy={false}
         hintError={null}
+        answerBusy={false}
+        answerError={null}
         onCodeChange={onCodeChange}
         onSubmit={onSubmit}
         onRevealHint={vi.fn()}
+        onRevealAnswer={vi.fn()}
       />,
     );
 
@@ -58,6 +62,7 @@ describe("clue detail card", () => {
           status: "completed",
           clue: "Start at the clock",
           answer: "Walk to the clock.",
+          can_reveal_answer: false,
           hints: [],
         }}
         clueCount={2}
@@ -67,15 +72,85 @@ describe("clue detail card", () => {
         error={null}
         hintBusy={false}
         hintError={null}
+        answerBusy={false}
+        answerError={null}
         onCodeChange={vi.fn()}
         onSubmit={vi.fn()}
         onRevealHint={vi.fn()}
+        onRevealAnswer={vi.fn()}
       />,
     );
 
     expect(screen.getByText("Clue solved")).toBeInTheDocument();
     expect(screen.getByText("Walk to the clock.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Solve clue" })).not.toBeInTheDocument();
+  });
+
+  it("offers an answer reveal while keeping the code form available", () => {
+    const onRevealAnswer = vi.fn();
+    render(
+      <ClueDetailCard
+        clue={{
+          id: "clue-1",
+          position: 1,
+          status: "available",
+          clue: "Start at the clock",
+          can_reveal_answer: true,
+          hints: [],
+        }}
+        clueCount={1}
+        gameStatus="open"
+        code=""
+        busy={false}
+        error={null}
+        hintBusy={false}
+        hintError={null}
+        answerBusy={false}
+        answerError={null}
+        onCodeChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRevealHint={vi.fn()}
+        onRevealAnswer={onRevealAnswer}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal answer" }));
+    expect(onRevealAnswer).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "Solve clue" })).toBeInTheDocument();
+  });
+
+  it("shows an early revealed answer without marking the clue solved", () => {
+    render(
+      <ClueDetailCard
+        clue={{
+          id: "clue-1",
+          position: 1,
+          status: "available",
+          clue: "Start at the clock",
+          answer: "Walk to the clock.",
+          can_reveal_answer: false,
+          hints: [],
+        }}
+        clueCount={1}
+        gameStatus="open"
+        code=""
+        busy={false}
+        error={null}
+        hintBusy={false}
+        hintError={null}
+        answerBusy={false}
+        answerError={null}
+        onCodeChange={vi.fn()}
+        onSubmit={vi.fn()}
+        onRevealHint={vi.fn()}
+        onRevealAnswer={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Walk to the clock.")).toBeInTheDocument();
+    expect(screen.getByText(/still need to enter the code/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Solve clue" })).toBeInTheDocument();
+    expect(screen.queryByText("Clue solved")).not.toBeInTheDocument();
   });
 });
 
@@ -90,6 +165,7 @@ describe("clue list", () => {
             position: 1,
             status: "available",
             clue: "Find the clock",
+            can_reveal_answer: false,
             hints: [],
           },
           {
@@ -98,6 +174,7 @@ describe("clue list", () => {
             status: "completed",
             clue: "Spot the mural",
             answer: "The blue wall",
+            can_reveal_answer: false,
             hints: [],
           },
         ]}

@@ -719,6 +719,21 @@ textarea:focus-visible, select:focus-visible {
   font-size: .75rem;
 }
 .next-hint--locked svg { width: 18px; height: 18px; }
+.answer-reveal-option {
+  max-width: 660px;
+  margin: 1.25rem 0;
+  padding: 1rem 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid rgba(255, 255, 255, .2);
+  background: rgba(0, 26, 51, .42);
+}
+.answer-reveal-option > div { display: flex; flex-direction: column; gap: .22rem; }
+.answer-reveal-option strong { color: white; font-size: .85rem; }
+.answer-reveal-option span { color: #b9ccdb; font-size: .72rem; line-height: 1.4; }
+.answer-reveal-option .button { flex: 0 0 auto; }
 .clue-row .clue-media { width: min(560px, 100%); margin: .8rem 0; }
 .clue-row .clue-media img, .clue-row .clue-media iframe { max-height: 360px; }
 .unlock-card p { max-width: 55ch; color: #d6e4ee; line-height: 1.55; }
@@ -1084,6 +1099,7 @@ textarea:focus-visible, select:focus-visible {
   .clue-hints > header { grid-template-columns: auto 1fr; }
   .clue-hints > header small { grid-column: 2; }
   .next-hint { align-items: stretch; flex-direction: column; }
+  .answer-reveal-option { align-items: stretch; flex-direction: column; }
   .completion-banner { grid-template-columns: auto 1fr; }
   .completion-banner > svg:last-child { display: none; }
   .clue-picker .section-title { display: block; }

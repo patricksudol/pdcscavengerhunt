@@ -23,6 +23,7 @@ export interface PlayerClue {
   status: "completed" | "available";
   clue: string;
   answer?: string;
+  can_reveal_answer: boolean;
   completed_at?: string;
   photo?: ClueMedia | null;
   video?: ClueMedia | null;
@@ -97,6 +98,7 @@ export interface AdminGame {
   description: string | null;
   instructions: string | null;
   closing_message: string | null;
+  allow_answer_reveal: boolean;
   status: GameStatus;
   player_count: number;
   clue_count: number;

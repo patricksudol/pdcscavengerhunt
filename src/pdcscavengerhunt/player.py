@@ -11,6 +11,7 @@ from .media_status import refresh_processing_videos
 from .models import (
     AuditEvent,
     Clue,
+    ClueAnswerReveal,
     ClueCompletion,
     ClueMedia,
     Game,
@@ -50,9 +51,7 @@ async def game_state(
 ) -> dict:
     clues = list(
         (
-            await db.scalars(
-                select(Clue).where(Clue.game_id == game.id).order_by(Clue.position)
-            )
+            await db.scalars(select(Clue).where(Clue.game_id == game.id).order_by(Clue.position))
         ).all()
     )
     completions = list(
@@ -76,20 +75,22 @@ async def game_state(
     )
     hint_reveals = list(
         (
-            await db.scalars(
-                select(HintReveal).where(
-                    HintReveal.game_player_id == membership.id
-                )
-            )
+            await db.scalars(select(HintReveal).where(HintReveal.game_player_id == membership.id))
         ).all()
     )
     revealed_hint_ids = {reveal.hint_id for reveal in hint_reveals}
+    answer_reveals = list(
+        (
+            await db.scalars(
+                select(ClueAnswerReveal).where(ClueAnswerReveal.game_player_id == membership.id)
+            )
+        ).all()
+    )
+    answer_revealed_clue_ids = {reveal.clue_id for reveal in answer_reveals}
     media_items = list(
         (
             await db.scalars(
-                select(ClueMedia).where(
-                    ClueMedia.clue_id.in_([clue.id for clue in clues])
-                )
+                select(ClueMedia).where(ClueMedia.clue_id.in_([clue.id for clue in clues]))
             )
         ).all()
     )
@@ -100,9 +101,7 @@ async def game_state(
     hint_media_items = list(
         (
             await db.scalars(
-                select(HintMedia).where(
-                    HintMedia.hint_id.in_([hint.id for hint in hints])
-                )
+                select(HintMedia).where(HintMedia.hint_id.in_([hint.id for hint in hints]))
             )
         ).all()
     )
@@ -143,11 +142,7 @@ async def game_state(
     def hints_for(clue: Clue) -> list[dict]:
         clue_hints = hints_by_clue.get(clue.id, [])
         first_unrevealed = next(
-            (
-                index
-                for index, hint in enumerate(clue_hints)
-                if hint.id not in revealed_hint_ids
-            ),
+            (index for index, hint in enumerate(clue_hints) if hint.id not in revealed_hint_ids),
             len(clue_hints),
         )
         result = []
@@ -184,6 +179,15 @@ async def game_state(
     clue_data = []
     for clue in clues:
         completion = completion_map.get(clue.id)
+        clue_hints = hints_by_clue.get(clue.id, [])
+        answer_revealed = clue.id in answer_revealed_clue_ids
+        can_reveal_answer = (
+            not completion
+            and not answer_revealed
+            and game.allow_answer_reveal
+            and game.status == GameStatus.open
+            and all(hint.id in revealed_hint_ids for hint in clue_hints)
+        )
         if completion:
             clue_data.append(
                 {
@@ -196,20 +200,23 @@ async def game_state(
                     "photo": media_for(clue, MediaType.photo),
                     "video": media_for(clue, MediaType.video),
                     "hints": hints_for(clue),
+                    "can_reveal_answer": False,
                 }
             )
         else:
-            clue_data.append(
-                {
-                    "id": str(clue.id),
-                    "position": clue.position,
-                    "status": "available",
-                    "clue": clue.title,
-                    "photo": media_for(clue, MediaType.photo),
-                    "video": media_for(clue, MediaType.video),
-                    "hints": hints_for(clue),
-                }
-            )
+            item = {
+                "id": str(clue.id),
+                "position": clue.position,
+                "status": "available",
+                "clue": clue.title,
+                "photo": media_for(clue, MediaType.photo),
+                "video": media_for(clue, MediaType.video),
+                "hints": hints_for(clue),
+                "can_reveal_answer": can_reveal_answer,
+            }
+            if answer_revealed:
+                item["answer"] = clue.content
+            clue_data.append(item)
     return {
         "id": str(game.id),
         "title": game.title,
@@ -241,9 +248,7 @@ async def list_games(request: Request):
         ).all()
         result = []
         for game, membership in rows:
-            clue_count = await db.scalar(
-                select(func.count(Clue.id)).where(Clue.game_id == game.id)
-            )
+            clue_count = await db.scalar(select(func.count(Clue.id)).where(Clue.game_id == game.id))
             completed_count = await db.scalar(
                 select(func.count(ClueCompletion.id)).where(
                     ClueCompletion.game_player_id == membership.id
@@ -273,9 +278,7 @@ async def get_game(request: Request, game_id: UUID):
         return await game_state(request, db, game, membership)
 
 
-@player_bp.post(
-    "/games/<game_id:uuid>/clues/<clue_id:uuid>/hints/<hint_id:uuid>/reveal"
-)
+@player_bp.post("/games/<game_id:uuid>/clues/<clue_id:uuid>/hints/<hint_id:uuid>/reveal")
 @login_required()
 async def reveal_hint(
     request: Request,
@@ -285,9 +288,7 @@ async def reveal_hint(
 ):
     async with request.app.ctx.db.session() as db:
         game = await db.get(Game, game_id)
-        membership = await membership_for(
-            db, game_id, request.ctx.user.id, lock=True
-        )
+        membership = await membership_for(db, game_id, request.ctx.user.id, lock=True)
         if not game or not membership:
             raise NotFound("Game not found")
         if game.status != GameStatus.open:
@@ -306,9 +307,7 @@ async def reveal_hint(
         hints = list(
             (
                 await db.scalars(
-                    select(Hint)
-                    .where(Hint.clue_id == clue.id)
-                    .order_by(Hint.position)
+                    select(Hint).where(Hint.clue_id == clue.id).order_by(Hint.position)
                 )
             ).all()
         )
@@ -318,9 +317,7 @@ async def reveal_hint(
         revealed_ids = set(
             (
                 await db.scalars(
-                    select(HintReveal.hint_id).where(
-                        HintReveal.game_player_id == membership.id
-                    )
+                    select(HintReveal.hint_id).where(HintReveal.game_player_id == membership.id)
                 )
             ).all()
         )
@@ -354,6 +351,83 @@ async def reveal_hint(
         }
 
 
+@player_bp.post("/games/<game_id:uuid>/clues/<clue_id:uuid>/answer/reveal")
+@login_required()
+async def reveal_answer(request: Request, game_id: UUID, clue_id: UUID):
+    async with request.app.ctx.db.session() as db:
+        game = await db.get(Game, game_id)
+        membership = await membership_for(db, game_id, request.ctx.user.id, lock=True)
+        if not game or not membership:
+            raise NotFound("Game not found")
+        if game.status != GameStatus.open:
+            raise Forbidden("This game is not open for answer reveals")
+        if not game.allow_answer_reveal:
+            raise Forbidden("Answer reveals are not enabled for this game")
+        clue = await db.get(Clue, clue_id)
+        if not clue or clue.game_id != game.id:
+            raise NotFound("Clue not found")
+        completed = await db.scalar(
+            select(ClueCompletion.id).where(
+                ClueCompletion.game_player_id == membership.id,
+                ClueCompletion.clue_id == clue.id,
+            )
+        )
+        if completed:
+            return {
+                "created": False,
+                "game": await game_state(request, db, game, membership),
+            }
+        existing = await db.scalar(
+            select(ClueAnswerReveal.id).where(
+                ClueAnswerReveal.game_player_id == membership.id,
+                ClueAnswerReveal.clue_id == clue.id,
+            )
+        )
+        if existing:
+            return {
+                "created": False,
+                "game": await game_state(request, db, game, membership),
+            }
+        hint_ids = set((await db.scalars(select(Hint.id).where(Hint.clue_id == clue.id))).all())
+        revealed_hint_ids = set(
+            (
+                await db.scalars(
+                    select(HintReveal.hint_id).where(
+                        HintReveal.game_player_id == membership.id,
+                        HintReveal.hint_id.in_(hint_ids),
+                    )
+                )
+            ).all()
+        )
+        if hint_ids - revealed_hint_ids:
+            raise InvalidUsage("Reveal all hints before revealing the answer")
+        db.add(
+            ClueAnswerReveal(
+                game_player_id=membership.id,
+                clue_id=clue.id,
+            )
+        )
+        await db.flush()
+        db.add(
+            AuditEvent(
+                actor_id=request.ctx.user.id,
+                action="clue.answer_revealed",
+                entity_type="clue",
+                entity_id=str(clue.id),
+                after={
+                    "game_id": str(game.id),
+                    "user_id": str(membership.user_id),
+                    "position": clue.position,
+                },
+                request_id=request.ctx.request_id,
+            )
+        )
+        return {
+            "created": True,
+            "game": await game_state(request, db, game, membership),
+        }
+
+
 @player_bp.post("/games/<game_id:uuid>/clues/<clue_id:uuid>/complete")
 @login_required()
 async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
@@ -368,9 +442,7 @@ async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
     result: dict | None = None
     async with request.app.ctx.db.session() as db:
         game = await db.get(Game, game_id)
-        membership = await membership_for(
-            db, game_id, request.ctx.user.id, lock=True
-        )
+        membership = await membership_for(db, game_id, request.ctx.user.id, lock=True)
         if not game or not membership:
             raise NotFound("Game not found")
         if game.status != GameStatus.open:
@@ -378,9 +450,7 @@ async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
         clues = list(
             (
                 await db.scalars(
-                    select(Clue)
-                    .where(Clue.game_id == game_id)
-                    .order_by(Clue.position)
+                    select(Clue).where(Clue.game_id == game_id).order_by(Clue.position)
                 )
             ).all()
         )

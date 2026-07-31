@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   ChevronRight,
+  Eye,
   Flag,
   KeyRound,
   Lightbulb,
@@ -146,9 +147,12 @@ export function ClueDetailCard({
   error,
   hintBusy,
   hintError,
+  answerBusy,
+  answerError,
   onCodeChange,
   onSubmit,
   onRevealHint,
+  onRevealAnswer,
 }: {
   clue: PlayerClue;
   clueCount: number;
@@ -158,9 +162,12 @@ export function ClueDetailCard({
   error: unknown;
   hintBusy: boolean;
   hintError: unknown;
+  answerBusy: boolean;
+  answerError: unknown;
   onCodeChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onRevealHint: (hintId: string) => void;
+  onRevealAnswer: () => void;
 }) {
   const headingId = `clue-${clue.position}`;
   const completed = clue.status === "completed";
@@ -193,14 +200,41 @@ export function ClueDetailCard({
           error={hintError}
           onReveal={onRevealHint}
         />
-        {completed ? (
+        {!completed && clue.can_reveal_answer && (
+          <div className="answer-reveal-option">
+            <div>
+              <strong>Need the answer?</strong>
+              <span>
+                {clue.hints.length
+                  ? "You have used every available hint."
+                  : "This clue does not have any hints."}{" "}
+                Revealing the answer will not complete this clue.
+              </span>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              busy={answerBusy}
+              onClick={onRevealAnswer}
+            >
+              <Eye /> Reveal answer
+            </Button>
+          </div>
+        )}
+        <ErrorMessage error={answerError} />
+        {clue.answer && (
           <div className="unlock-card__answer">
-            <div className="eyebrow">Answer</div>
+            <div className="eyebrow">{completed ? "Answer" : "Revealed answer"}</div>
             <p>{clue.answer}</p>
           </div>
-        ) : gameStatus === "open" ? (
+        )}
+        {completed ? null : gameStatus === "open" ? (
           <>
-            <p>Solve this clue, then enter the code you find to reveal the answer.</p>
+            <p>
+              {clue.answer
+                ? "The answer is revealed, but you still need to enter the code to complete this clue."
+                : "Solve this clue, then enter the code you find to reveal the answer."}
+            </p>
             <form onSubmit={onSubmit}>
               <input
                 aria-label={`Code for clue ${clue.position}`}
@@ -443,6 +477,16 @@ function GameView({
       queryClient.setQueryData(["player-game", gameId], result.game);
     },
   });
+  const revealAnswer = useMutation({
+    mutationFn: () =>
+      postJson<{ created: boolean; game: PlayerGameDetail }>(
+        `/api/v1/player/games/${gameId}/clues/${selectedClue?.id}/answer/reveal`,
+        {},
+      ),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["player-game", gameId], result.game);
+    },
+  });
 
   useEffect(() => {
     return () => {
@@ -528,9 +572,12 @@ function GameView({
                 error={complete.error}
                 hintBusy={revealHint.isPending}
                 hintError={revealHint.error}
+                answerBusy={revealAnswer.isPending}
+                answerError={revealAnswer.error}
                 onCodeChange={setCode}
                 onSubmit={submit}
                 onRevealHint={(hintId) => revealHint.mutate(hintId)}
+                onRevealAnswer={() => revealAnswer.mutate()}
               />
             ) : clueId ? (
               <EmptyState icon={<Flag />} title="Clue not found">

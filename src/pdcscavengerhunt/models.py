@@ -45,9 +45,7 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     email_address: Mapped[str] = mapped_column(String(320))
-    normalized_email_address: Mapped[str] = mapped_column(
-        String(320), unique=True, index=True
-    )
+    normalized_email_address: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(180))
     password_hash: Mapped[str | None] = mapped_column(String(255))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
@@ -90,6 +88,9 @@ class Game(Base):
     description: Mapped[str | None] = mapped_column(Text)
     instructions: Mapped[str | None] = mapped_column(Text)
     closing_message: Mapped[str | None] = mapped_column(Text)
+    allow_answer_reveal: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     status: Mapped[GameStatus] = mapped_column(
         Enum(GameStatus, native_enum=False), default=GameStatus.draft, index=True
     )
@@ -138,6 +139,9 @@ class GamePlayer(Base):
     hint_reveals: Mapped[list[HintReveal]] = relationship(
         back_populates="membership", cascade="all, delete-orphan"
     )
+    answer_reveals: Mapped[list[ClueAnswerReveal]] = relationship(
+        back_populates="membership", cascade="all, delete-orphan"
+    )
 
 
 class Clue(Base):
@@ -174,6 +178,9 @@ class Clue(Base):
         cascade="all, delete-orphan",
         order_by="Hint.position",
     )
+    answer_reveals: Mapped[list[ClueAnswerReveal]] = relationship(
+        back_populates="clue", cascade="all, delete-orphan"
+    )
 
 
 class Hint(Base):
@@ -205,17 +212,13 @@ class Hint(Base):
 
 class ClueMedia(Base):
     __tablename__ = "clue_media"
-    __table_args__ = (
-        UniqueConstraint("clue_id", "media_type", name="uq_clue_media_clue_type"),
-    )
+    __table_args__ = (UniqueConstraint("clue_id", "media_type", name="uq_clue_media_clue_type"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     clue_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("clues.id", ondelete="CASCADE"), index=True
     )
-    media_type: Mapped[MediaType] = mapped_column(
-        Enum(MediaType, native_enum=False), index=True
-    )
+    media_type: Mapped[MediaType] = mapped_column(Enum(MediaType, native_enum=False), index=True)
     provider_key: Mapped[str] = mapped_column(String(255), unique=True)
     original_filename: Mapped[str] = mapped_column(String(255))
     content_type: Mapped[str] = mapped_column(String(80))
@@ -236,17 +239,13 @@ class ClueMedia(Base):
 
 class HintMedia(Base):
     __tablename__ = "hint_media"
-    __table_args__ = (
-        UniqueConstraint("hint_id", "media_type", name="uq_hint_media_hint_type"),
-    )
+    __table_args__ = (UniqueConstraint("hint_id", "media_type", name="uq_hint_media_hint_type"),)
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     hint_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("hints.id", ondelete="CASCADE"), index=True
     )
-    media_type: Mapped[MediaType] = mapped_column(
-        Enum(MediaType, native_enum=False), index=True
-    )
+    media_type: Mapped[MediaType] = mapped_column(Enum(MediaType, native_enum=False), index=True)
     provider_key: Mapped[str] = mapped_column(String(255), unique=True)
     original_filename: Mapped[str] = mapped_column(String(255))
     content_type: Mapped[str] = mapped_column(String(80))
@@ -268,9 +267,7 @@ class HintMedia(Base):
 class ClueCompletion(Base):
     __tablename__ = "clue_completions"
     __table_args__ = (
-        UniqueConstraint(
-            "game_player_id", "clue_id", name="uq_clue_completions_membership_clue"
-        ),
+        UniqueConstraint("game_player_id", "clue_id", name="uq_clue_completions_membership_clue"),
         Index("ix_clue_completions_membership_time", "game_player_id", "completed_at"),
     )
 
@@ -290,9 +287,7 @@ class ClueCompletion(Base):
 class HintReveal(Base):
     __tablename__ = "hint_reveals"
     __table_args__ = (
-        UniqueConstraint(
-            "game_player_id", "hint_id", name="uq_hint_reveals_membership_hint"
-        ),
+        UniqueConstraint("game_player_id", "hint_id", name="uq_hint_reveals_membership_hint"),
         Index("ix_hint_reveals_membership_time", "game_player_id", "revealed_at"),
     )
 
@@ -307,6 +302,34 @@ class HintReveal(Base):
 
     membership: Mapped[GamePlayer] = relationship(back_populates="hint_reveals")
     hint: Mapped[Hint] = relationship(back_populates="reveals")
+
+
+class ClueAnswerReveal(Base):
+    __tablename__ = "clue_answer_reveals"
+    __table_args__ = (
+        UniqueConstraint(
+            "game_player_id",
+            "clue_id",
+            name="uq_clue_answer_reveals_membership_clue",
+        ),
+        Index(
+            "ix_clue_answer_reveals_membership_time",
+            "game_player_id",
+            "revealed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    game_player_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("game_players.id", ondelete="CASCADE"), index=True
+    )
+    clue_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clues.id", ondelete="CASCADE"), index=True
+    )
+    revealed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    membership: Mapped[GamePlayer] = relationship(back_populates="answer_reveals")
+    clue: Mapped[Clue] = relationship(back_populates="answer_reveals")
 
 
 class AuditEvent(Base):
