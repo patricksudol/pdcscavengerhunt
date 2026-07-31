@@ -462,6 +462,7 @@ async def test_admin_can_page_through_audit_events(app, admin):
         "full_name": admin.full_name,
         "is_admin": True,
     }
+    assert first_page.json["items"][0]["game"] is None
 
     _request, second_page = await app.asgi_client.get(
         "/api/v1/admin/audit-events?limit=1&offset=1",
@@ -470,6 +471,61 @@ async def test_admin_can_page_through_audit_events(app, admin):
     )
     assert second_page.status == 200
     assert second_page.json["items"][0]["action"] == "auth.password_changed"
+
+
+async def test_audit_events_include_the_related_game(app, admin):
+    async with app.ctx.db.session() as db:
+        game = Game(title="Audited Hunt", status="open")
+        db.add(game)
+        await db.flush()
+        clue = Clue(
+            game_id=game.id,
+            position=1,
+            title="Audited Clue",
+            content="Find it",
+            code_fingerprint=fingerprint_code("AUDIT", app.ctx.settings),
+        )
+        db.add(clue)
+        await db.flush()
+        hint = Hint(clue_id=clue.id, position=1, text="Look nearby")
+        db.add(hint)
+        await db.flush()
+        db.add_all(
+            [
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="game.updated",
+                    entity_type="game",
+                    entity_id=str(game.id),
+                ),
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="clue.updated",
+                    entity_type="clue",
+                    entity_id=str(clue.id),
+                ),
+                AuditEvent(
+                    actor_id=admin.id,
+                    action="hint.updated",
+                    entity_type="hint",
+                    entity_id=str(hint.id),
+                ),
+            ]
+        )
+        expected_game = {"id": str(game.id), "title": game.title}
+
+    cookies, headers = auth(app, admin)
+    _request, response = await app.asgi_client.get(
+        "/api/v1/admin/audit-events",
+        cookies=cookies,
+        headers=headers,
+    )
+
+    assert response.status == 200
+    by_action = {item["action"]: item for item in response.json["items"]}
+    assert by_action["game.updated"]["game"] == expected_game
+    assert by_action["clue.updated"]["game"] == expected_game
+    assert by_action["hint.updated"]["game"] == expected_game
 
 
 async def test_non_admin_cannot_read_audit_events(app, admin):
@@ -570,6 +626,12 @@ async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
         ]
         db.add_all([membership, *clues])
         await db.flush()
+        hints = [
+            Hint(clue_id=clue.id, position=1, text=f"Hint for clue {clue.position}")
+            for clue in clues
+        ]
+        db.add_all(hints)
+        await db.flush()
         db.add_all(
             [
                 ClueCompletion(
@@ -578,10 +640,15 @@ async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
                 )
                 for clue in clues
             ]
+            + [
+                HintReveal(game_player_id=membership.id, hint_id=hint.id)
+                for hint in hints
+            ]
         )
         membership_id = membership.id
         target_clue_id = clues[1].id
         retained_clue_id = clues[0].id
+        retained_hint_id = hints[0].id
 
     cookies, headers = auth(app, admin)
     _request, response = await app.asgi_client.request(
@@ -609,6 +676,16 @@ async def test_admin_can_reset_player_progress_to_a_specific_clue(app, admin):
             ).all()
         )
         assert remaining_clue_ids == {retained_clue_id}
+        remaining_hint_ids = set(
+            (
+                await db.scalars(
+                    select(HintReveal.hint_id).where(
+                        HintReveal.game_player_id == membership_id
+                    )
+                )
+            ).all()
+        )
+        assert remaining_hint_ids == {retained_hint_id}
         event = await db.scalar(
             select(AuditEvent).where(
                 AuditEvent.action == "player.progress_reset",

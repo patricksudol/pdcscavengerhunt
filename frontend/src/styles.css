@@ -834,6 +834,8 @@ textarea:focus-visible, select:focus-visible {
 .audit-actor { display: flex; flex-direction: column; min-width: 0; }
 .audit-actor strong, .audit-actor small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audit-actor small { color: var(--muted); margin-top: .2rem; }
+.audit-summary { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; }
+.audit-game { max-width: 100%; margin-bottom: .25rem; color: var(--navy); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audit-summary > span { color: var(--muted); }
 .audit-summary details { margin-top: .45rem; }
 .audit-summary summary { width: fit-content; color: var(--blue); cursor: pointer; font-size: .7rem; font-weight: 800; }
@@ -974,7 +976,9 @@ textarea:focus-visible, select:focus-visible {
 .hint-editor > header strong svg { width: 18px; height: 18px; color: #57920b; }
 .hint-editor > header small { color: var(--muted); font-size: .68rem; }
 .hint-admin-list { background: white; }
-.hint-admin-row { min-height: 64px; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: .7rem; padding: .55rem .7rem; border-bottom: 1px solid var(--line); }
+.hint-admin-row { position: relative; min-height: 64px; display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; align-items: center; gap: .7rem; padding: .55rem .7rem; border-bottom: 1px solid var(--line); background: white; transition: box-shadow .15s; }
+.hint-admin-row--dragging { z-index: 3; box-shadow: 0 12px 30px rgba(8, 28, 48, .22); }
+.hint-drag-cell { display: flex; align-items: center; gap: .25rem; color: #8091a2; }
 .hint-admin-position { width: 34px; height: 34px; display: grid; place-items: center; color: var(--navy-deep); background: var(--lime); font: 400 1.3rem/1 "League Gothic", Impact, sans-serif; }
 .hint-admin-copy { min-width: 0; display: flex; flex-direction: column; gap: .2rem; }
 .hint-admin-copy strong, .hint-admin-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1103,7 +1107,7 @@ textarea:focus-visible, select:focus-visible {
   .clue-admin-row { grid-template-columns: 68px 1fr; }
   .clue-admin-code { flex-wrap: wrap; }
   .clue-admin-actions { grid-column: 2; }
-  .hint-admin-row { grid-template-columns: 38px minmax(0, 1fr); }
+  .hint-admin-row { grid-template-columns: 68px minmax(0, 1fr); }
   .hint-admin-actions { grid-column: 2; }
   .progress-player__summary { align-items: flex-start; flex-wrap: wrap; }
   .mini-progress { flex-basis: 100%; margin-left: 44px; }

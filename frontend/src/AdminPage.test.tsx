@@ -2,8 +2,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AuditTable, Players, ProgressEditor } from "./AdminPage";
-import type { AdminGameDetail, AdminUser, AuditEvent, Me } from "./api";
+import { AuditTable, HintsEditor, Players, ProgressEditor } from "./AdminPage";
+import type {
+  AdminClue,
+  AdminGameDetail,
+  AdminUser,
+  AuditEvent,
+  Me,
+} from "./api";
 
 afterEach(() => {
   cleanup();
@@ -272,6 +278,52 @@ describe("admin player progress", () => {
   });
 });
 
+describe("admin clue hints", () => {
+  it("provides sortable drag handles and accessible move controls", () => {
+    const clue: AdminClue = {
+      id: "clue-1",
+      position: 1,
+      title: "Find the clock",
+      content: "At the clock",
+      code: "CLOCK",
+      code_set: true,
+      photo: null,
+      video: null,
+      hints: [
+        {
+          id: "hint-1",
+          position: 1,
+          text: "Look up",
+          photo: null,
+          video: null,
+        },
+        {
+          id: "hint-2",
+          position: 2,
+          text: "Look left",
+          photo: null,
+          video: null,
+        },
+      ],
+    };
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <HintsEditor clue={clue} onChanged={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Drag hint 1 to reorder" }),
+    ).toHaveClass("clue-drag-handle");
+    expect(
+      screen.getByRole("button", { name: "Drag hint 2 to reorder" }),
+    ).toHaveClass("clue-drag-handle");
+    expect(screen.getByRole("button", { name: "Move hint 1 up" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Move hint 1 down" })).toBeEnabled();
+  });
+});
+
 describe("admin audit trail", () => {
   it("shows the actor, activity, timestamp, and audit details", () => {
     const events: AuditEvent[] = [
@@ -292,6 +344,7 @@ describe("admin audit trail", () => {
           is_admin: false,
         },
         subject: null,
+        game: { id: "game-1", title: "Downtown Hunt" },
       },
     ];
 
@@ -299,12 +352,46 @@ describe("admin audit trail", () => {
 
     expect(screen.getByText("Player One")).toBeInTheDocument();
     expect(screen.getByText("Completed a clue")).toBeInTheDocument();
+    expect(screen.getByText("Downtown Hunt")).toBeInTheDocument();
     expect(screen.getByText("Clue 2")).toBeInTheDocument();
     expect(screen.getByText("Jul 28, 2026, 10:35 AM")).toHaveAttribute(
       "datetime",
       events[0].created_at,
     );
     expect(screen.getByText("Record details")).toBeInTheDocument();
+  });
+
+  it("shows player hint reveals with the hint number", () => {
+    const event: AuditEvent = {
+      id: "event-hint",
+      action: "hint.revealed",
+      entity_type: "hint",
+      entity_id: "hint-2",
+      reason: null,
+      before: null,
+      after: {
+        game_id: "game-1",
+        clue_id: "clue-1",
+        position: 2,
+      },
+      request_id: "request-hint",
+      created_at: "2026-07-28T14:35:00+00:00",
+      actor: {
+        id: "player-1",
+        email_address: "player@example.com",
+        full_name: "Player One",
+        is_admin: false,
+      },
+      subject: null,
+      game: { id: "game-1", title: "Downtown Hunt" },
+    };
+
+    render(<AuditTable events={[event]} />);
+
+    expect(screen.getByText("Player One")).toBeInTheDocument();
+    expect(screen.getByText("Revealed hint")).toBeInTheDocument();
+    expect(screen.getByText("Hint 2")).toBeInTheDocument();
+    expect(screen.getByText("Downtown Hunt")).toBeInTheDocument();
   });
 
   it("identifies unauthenticated failed logins without exposing an email", () => {
@@ -321,6 +408,7 @@ describe("admin audit trail", () => {
         created_at: "2026-07-28T15:00:00+00:00",
         actor: null,
         subject: null,
+        game: null,
       },
     ];
 

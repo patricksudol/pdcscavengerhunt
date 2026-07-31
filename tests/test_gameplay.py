@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from pdcscavengerhunt.models import (
+    AuditEvent,
     Clue,
     ClueCompletion,
     Game,
@@ -189,6 +190,19 @@ async def test_player_reveals_clue_hints_in_order(app, admin):
     async with app.ctx.db.session() as db:
         reveals = list((await db.scalars(select(HintReveal))).all())
         assert {reveal.hint_id for reveal in reveals} == {hint.id for hint in hints}
+        reveal_events = list(
+            (
+                await db.scalars(
+                    select(AuditEvent).where(AuditEvent.action == "hint.revealed")
+                )
+            ).all()
+        )
+        assert len(reveal_events) == 2
+        assert {event.actor_id for event in reveal_events} == {player.id}
+        assert {event.entity_id for event in reveal_events} == {
+            str(hint.id) for hint in hints
+        }
+        assert {event.after["position"] for event in reveal_events} == {1, 2}
 
 
 async def test_player_can_complete_clues_in_any_order(app, admin):

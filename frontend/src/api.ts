@@ -64,6 +64,11 @@ export interface AuditActor {
   is_admin: boolean;
 }
 
+export interface AuditGame {
+  id: string;
+  title: string;
+}
+
 export interface AuditEvent {
   id: string;
   action: string;
@@ -76,6 +81,7 @@ export interface AuditEvent {
   created_at: string;
   actor: AuditActor | null;
   subject: AuditActor | null;
+  game: AuditGame | null;
 }
 
 export interface AuditEventPage {

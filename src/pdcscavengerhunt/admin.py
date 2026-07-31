@@ -127,6 +127,35 @@ def audit_subject_id(event: AuditEvent) -> UUID | None:
         return None
 
 
+def audit_uuid(value: object) -> UUID | None:
+    try:
+        return UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+
+
+def audit_game_id(event: AuditEvent) -> UUID | None:
+    if event.entity_type == "game":
+        return audit_uuid(event.entity_id)
+    for snapshot in (event.after, event.before):
+        if snapshot and (game_id := audit_uuid(snapshot.get("game_id"))):
+            return game_id
+    return None
+
+
+def audit_clue_id(event: AuditEvent) -> UUID | None:
+    if event.entity_type == "clue":
+        return audit_uuid(event.entity_id)
+    for snapshot in (event.after, event.before):
+        if snapshot and (clue_id := audit_uuid(snapshot.get("clue_id"))):
+            return clue_id
+    return None
+
+
+def audit_hint_id(event: AuditEvent) -> UUID | None:
+    return audit_uuid(event.entity_id) if event.entity_type == "hint" else None
+
+
 def media_json(media: ClueMedia | HintMedia) -> dict:
     return {
         "id": str(media.id),
@@ -349,6 +378,68 @@ async def list_audit_events(request: Request):
             if subject_ids
             else {}
         )
+        clue_ids = {
+            clue_id
+            for event, _actor in rows
+            if (clue_id := audit_clue_id(event))
+        }
+        clue_game_ids = (
+            dict(
+                (
+                    await db.execute(
+                        select(Clue.id, Clue.game_id).where(Clue.id.in_(clue_ids))
+                    )
+                ).all()
+            )
+            if clue_ids
+            else {}
+        )
+        hint_ids = {
+            hint_id
+            for event, _actor in rows
+            if (hint_id := audit_hint_id(event))
+        }
+        hint_game_ids = (
+            dict(
+                (
+                    await db.execute(
+                        select(Hint.id, Clue.game_id)
+                        .join(Clue, Clue.id == Hint.clue_id)
+                        .where(Hint.id.in_(hint_ids))
+                    )
+                ).all()
+            )
+            if hint_ids
+            else {}
+        )
+        game_ids = {
+            game_id
+            for event, _actor in rows
+            if (
+                game_id := audit_game_id(event)
+                or clue_game_ids.get(audit_clue_id(event))
+                or hint_game_ids.get(audit_hint_id(event))
+            )
+        }
+        games = (
+            {
+                game.id: game
+                for game in (
+                    await db.scalars(select(Game).where(Game.id.in_(game_ids)))
+                ).all()
+            }
+            if game_ids
+            else {}
+        )
+
+        def event_game(event: AuditEvent) -> Game | None:
+            game_id = (
+                audit_game_id(event)
+                or clue_game_ids.get(audit_clue_id(event))
+                or hint_game_ids.get(audit_hint_id(event))
+            )
+            return games.get(game_id)
+
         return {
             "items": [
                 {
@@ -363,6 +454,11 @@ async def list_audit_events(request: Request):
                     "created_at": event.created_at.isoformat(),
                     "actor": audit_user_json(actor),
                     "subject": audit_user_json(subjects.get(audit_subject_id(event))),
+                    "game": (
+                        {"id": str(game.id), "title": game.title}
+                        if (game := event_game(event))
+                        else None
+                    ),
                 }
                 for event, actor in rows
             ],

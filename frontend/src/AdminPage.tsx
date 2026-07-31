@@ -314,6 +314,9 @@ function auditSummary(event: AuditEvent) {
   if (event.action === "clue.completed" && typeof after?.position === "number") {
     return `Clue ${after.position}`;
   }
+  if (event.action === "hint.revealed" && typeof after?.position === "number") {
+    return `Hint ${after.position}`;
+  }
   if (event.action === "user.created" && typeof after?.email_address === "string") {
     return after.email_address;
   }
@@ -350,7 +353,7 @@ function auditSummary(event: AuditEvent) {
 export function AuditTable({ events }: { events: AuditEvent[] }) {
   return (
     <div className="table audit-table-wrap">
-      <div className="audit-table audit-table--head"><span>When</span><span>Player or admin</span><span>Activity</span><span>Details</span></div>
+      <div className="audit-table audit-table--head"><span>When</span><span>Player or admin</span><span>Activity</span><span>Game &amp; details</span></div>
       {events.map((event) => (
         <div className="audit-table" key={event.id}>
           <time dateTime={event.created_at}>{formatDate(event.created_at)}</time>
@@ -363,10 +366,12 @@ export function AuditTable({ events }: { events: AuditEvent[] }) {
           </span>
           <span><strong>{auditActionLabels[event.action] ?? humanize(event.action.replaceAll(".", " "))}</strong></span>
           <span className="audit-summary">
+            {event.game && <strong className="audit-game">{event.game.title}</strong>}
             <span>{auditSummary(event)}</span>
             <details>
               <summary>Record details</summary>
               <dl>
+                {event.game && <div><dt>Game</dt><dd>{event.game.title} · {event.game.id}</dd></div>}
                 <div><dt>Entity</dt><dd>{humanize(event.entity_type)} · {event.entity_id}</dd></div>
                 {event.request_id && <div><dt>Request</dt><dd>{event.request_id}</dd></div>}
                 {event.before && <div><dt>Before</dt><dd><pre>{JSON.stringify(event.before, null, 2)}</pre></dd></div>}
@@ -1265,7 +1270,106 @@ function HintEditor({
   );
 }
 
-function HintsEditor({
+function SortableHintRow({
+  hint,
+  index,
+  total,
+  busy,
+  onMove,
+  onEdit,
+  onDelete,
+}: {
+  hint: AdminHint;
+  index: number;
+  total: number;
+  busy: boolean;
+  onMove: (direction: -1 | 1) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: hint.id, disabled: busy });
+  return (
+    <article
+      className={`hint-admin-row ${isDragging ? "hint-admin-row--dragging" : ""}`}
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+    >
+      <div className="hint-drag-cell">
+        <button
+          className="clue-drag-handle"
+          type="button"
+          ref={setActivatorNodeRef}
+          disabled={busy}
+          aria-label={`Drag hint ${hint.position} to reorder`}
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical aria-hidden="true" />
+        </button>
+        <span className="hint-admin-position">{hint.position}</span>
+      </div>
+      <span className="hint-admin-copy">
+        <strong>{hint.text || "Media-only hint"}</strong>
+        <small>
+          {[
+            hint.text && "Text",
+            hint.photo && "Photo",
+            hint.video && "Video",
+          ].filter(Boolean).join(" · ") || "No content yet"}
+        </small>
+      </span>
+      <span className="hint-admin-actions">
+        <button
+          className="icon-button"
+          type="button"
+          disabled={index === 0 || busy}
+          onClick={() => onMove(-1)}
+          aria-label={`Move hint ${hint.position} up`}
+        >
+          <ChevronUp />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          disabled={index === total - 1 || busy}
+          onClick={() => onMove(1)}
+          aria-label={`Move hint ${hint.position} down`}
+        >
+          <ChevronDown />
+        </button>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={onEdit}
+          aria-label={`Edit hint ${hint.position}`}
+        >
+          <Pencil />
+        </button>
+        <button
+          className="icon-button danger-icon"
+          type="button"
+          onClick={onDelete}
+          aria-label={`Delete hint ${hint.position}`}
+        >
+          <Trash2 />
+        </button>
+      </span>
+    </article>
+  );
+}
+
+export function HintsEditor({
   clue,
   onChanged,
 }: {
@@ -1275,6 +1379,15 @@ function HintsEditor({
   const [hints, setHints] = useState(clue.hints);
   const [editing, setEditing] = useState<AdminHint | null>(null);
   const [newText, setNewText] = useState("");
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 180, tolerance: 6 },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
   const create = useMutation({
     mutationFn: () =>
       postJson<AdminHint>(`/api/v1/admin/clues/${clue.id}/hints`, {
@@ -1287,10 +1400,16 @@ function HintsEditor({
     },
   });
   const reorder = useMutation({
-    mutationFn: (hintIds: string[]) =>
+    mutationFn: ({
+      hintIds,
+    }: {
+      hintIds: string[];
+      previous: AdminHint[];
+    }) =>
       postJson(`/api/v1/admin/clues/${clue.id}/hints/reorder`, {
         hint_ids: hintIds,
       }),
+    onError: (_error, variables) => setHints(variables.previous),
     onSuccess: onChanged,
   });
   const remove = useMutation({
@@ -1306,18 +1425,28 @@ function HintsEditor({
     },
   });
 
-  function move(index: number, direction: -1 | 1) {
-    const next = [...hints];
-    [next[index], next[index + direction]] = [
-      next[index + direction],
-      next[index],
-    ];
+  function saveOrder(next: AdminHint[]) {
     const positioned = next.map((hint, hintIndex) => ({
       ...hint,
       position: hintIndex + 1,
     }));
     setHints(positioned);
-    reorder.mutate(positioned.map((hint) => hint.id));
+    reorder.mutate({
+      hintIds: positioned.map((hint) => hint.id),
+      previous: hints,
+    });
+  }
+
+  function move(index: number, direction: -1 | 1) {
+    saveOrder(arrayMove(hints, index, index + direction));
+  }
+
+  function finishDragging(event: DragEndEvent) {
+    if (!event.over || event.active.id === event.over.id) return;
+    const oldIndex = hints.findIndex((hint) => hint.id === event.active.id);
+    const newIndex = hints.findIndex((hint) => hint.id === event.over!.id);
+    if (oldIndex < 0 || newIndex < 0) return;
+    saveOrder(arrayMove(hints, oldIndex, newIndex));
   }
 
   function updateHint(updated: AdminHint) {
@@ -1349,67 +1478,39 @@ function HintsEditor({
       <header>
         <div>
           <strong><Lightbulb /> Player hints</strong>
-          <small>Players reveal these one at a time in this order.</small>
+          <small>Drag hints into the order players will reveal them.</small>
         </div>
       </header>
       {hints.length > 0 && (
-        <div className="hint-admin-list">
-          {hints.map((hint, index) => (
-            <article className="hint-admin-row" key={hint.id}>
-              <span className="hint-admin-position">{hint.position}</span>
-              <span className="hint-admin-copy">
-                <strong>{hint.text || "Media-only hint"}</strong>
-                <small>
-                  {[
-                    hint.text && "Text",
-                    hint.photo && "Photo",
-                    hint.video && "Video",
-                  ].filter(Boolean).join(" · ") || "No content yet"}
-                </small>
-              </span>
-              <span className="hint-admin-actions">
-                <button
-                  className="icon-button"
-                  type="button"
-                  disabled={index === 0 || reorder.isPending}
-                  onClick={() => move(index, -1)}
-                  aria-label={`Move hint ${hint.position} up`}
-                >
-                  <ChevronUp />
-                </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  disabled={index === hints.length - 1 || reorder.isPending}
-                  onClick={() => move(index, 1)}
-                  aria-label={`Move hint ${hint.position} down`}
-                >
-                  <ChevronDown />
-                </button>
-                <button
-                  className="icon-button"
-                  type="button"
-                  onClick={() => setEditing(hint)}
-                  aria-label={`Edit hint ${hint.position}`}
-                >
-                  <Pencil />
-                </button>
-                <button
-                  className="icon-button danger-icon"
-                  type="button"
-                  onClick={() => {
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={finishDragging}
+        >
+          <SortableContext
+            items={hints.map((hint) => hint.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            <div className="hint-admin-list">
+              {hints.map((hint, index) => (
+                <SortableHintRow
+                  hint={hint}
+                  index={index}
+                  total={hints.length}
+                  busy={reorder.isPending}
+                  key={hint.id}
+                  onMove={(direction) => move(index, direction)}
+                  onEdit={() => setEditing(hint)}
+                  onDelete={() => {
                     if (window.confirm(`Delete hint ${hint.position}?`)) {
                       remove.mutate(hint.id);
                     }
                   }}
-                  aria-label={`Delete hint ${hint.position}`}
-                >
-                  <Trash2 />
-                </button>
-              </span>
-            </article>
-          ))}
-        </div>
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
       )}
       <div className="hint-editor__add">
         <TextArea
