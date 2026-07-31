@@ -7,12 +7,12 @@ import {
   ChevronRight,
   Flag,
   KeyRound,
-  LockKeyhole,
   LogOut,
   Map,
   MapPin,
   PartyPopper,
   ShieldCheck,
+  Trophy,
 } from "lucide-react";
 
 import {
@@ -61,53 +61,113 @@ export function ClueMediaAttachments({
   );
 }
 
-export function CurrentClueCard({
-  current,
+export function ClueDetailCard({
+  clue,
   clueCount,
+  gameStatus,
   code,
   busy,
   error,
   onCodeChange,
   onSubmit,
 }: {
-  current: PlayerClue;
+  clue: PlayerClue;
   clueCount: number;
+  gameStatus: PlayerGameDetail["status"];
   code: string;
   busy: boolean;
   error: unknown;
   onCodeChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const headingId = `current-clue-${current.position}`;
+  const headingId = `clue-${clue.position}`;
+  const completed = clue.status === "completed";
   return (
     <section className="unlock-card" aria-labelledby={headingId}>
       <header className="unlock-card__head">
-        <span><MapPin aria-hidden="true" /> Current clue</span>
-        <small>Clue {current.position} of {clueCount}</small>
+        <span>
+          {completed
+            ? <CheckCircle2 aria-hidden="true" />
+            : <MapPin aria-hidden="true" />}
+          {completed ? "Clue solved" : "Your selected clue"}
+        </span>
+        <small>Clue {clue.position} of {clueCount}</small>
       </header>
       <div className="unlock-card__body">
-        <span className="unlock-card__icon" aria-hidden="true"><KeyRound /></span>
-        <div className="eyebrow">Your next challenge</div>
-        <h2 className="unlock-card__clue" id={headingId}>{current.clue}</h2>
+        <span className="unlock-card__icon" aria-hidden="true">
+          {completed ? <Check /> : <KeyRound />}
+        </span>
+        <div className="eyebrow">{completed ? "Nice work" : "Your challenge"}</div>
+        <h1 className="unlock-card__clue" id={headingId}>{clue.clue}</h1>
         <ClueMediaAttachments
-          photo={current.photo}
-          video={current.video}
-          clueTitle={current.clue}
+          photo={clue.photo}
+          video={clue.video}
+          clueTitle={clue.clue}
         />
-        <p>Solve this clue, then enter the code you find to reveal the answer.</p>
-        <form onSubmit={onSubmit}>
-          <input
-            aria-label={`Code for clue ${current.position}`}
-            autoCapitalize="characters"
-            autoComplete="off"
-            placeholder="ENTER CODE"
-            value={code}
-            onChange={(event) => onCodeChange(event.target.value)}
-            required
-          />
-          <Button busy={busy} type="submit">Reveal answer</Button>
-        </form>
-        <ErrorMessage error={error} />
+        {completed ? (
+          <div className="unlock-card__answer">
+            <div className="eyebrow">Answer</div>
+            <p>{clue.answer}</p>
+          </div>
+        ) : gameStatus === "open" ? (
+          <>
+            <p>Solve this clue, then enter the code you find to reveal the answer.</p>
+            <form onSubmit={onSubmit}>
+              <input
+                aria-label={`Code for clue ${clue.position}`}
+                autoCapitalize="characters"
+                autoComplete="off"
+                placeholder="ENTER CODE"
+                value={code}
+                onChange={(event) => onCodeChange(event.target.value)}
+                required
+              />
+              <Button busy={busy} type="submit">Solve clue</Button>
+            </form>
+            <ErrorMessage error={error} />
+          </>
+        ) : (
+          <p>This game is closed, so this clue can no longer be solved.</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function ClueList({
+  gameId,
+  clues,
+}: {
+  gameId: string;
+  clues: PlayerClue[];
+}) {
+  return (
+    <section className="clue-picker" aria-labelledby="clue-picker-title">
+      <header className="section-title">
+        <div className="eyebrow">Choose a clue</div>
+        <h2 id="clue-picker-title">Pick your next challenge</h2>
+        <p>Select any clue to see the full challenge and enter its code.</p>
+      </header>
+      <div className="clue-picker__list">
+        {clues.map((clue) => {
+          const completed = clue.status === "completed";
+          return (
+            <a
+              className={`clue-choice ${completed ? "clue-choice--completed" : ""}`}
+              href={`/games/${encodeURIComponent(gameId)}/clues/${encodeURIComponent(clue.id)}`}
+              key={clue.id}
+            >
+              <span className="clue-choice__number">{clue.position}</span>
+              <span className="clue-choice__copy">
+                <small>Clue {clue.position}</small>
+                <strong>{clue.clue}</strong>
+              </span>
+              <span className="clue-choice__status">
+                {completed ? <><CheckCircle2 /> Solved</> : <>View clue <ChevronRight /></>}
+              </span>
+            </a>
+          );
+        })}
       </div>
     </section>
   );
@@ -138,9 +198,14 @@ function ClueConfetti({ grandFinale = false }: { grandFinale?: boolean }) {
 }
 
 export function PlayerPage({ me }: { me: Me }) {
-  const gameMatch = window.location.pathname.match(/^\/games\/([^/]+)/);
+  const gameMatch = window.location.pathname.match(
+    /^\/games\/([^/]+)(?:\/clues\/([^/]+))?/,
+  );
   const gameId = gameMatch ? decodeURIComponent(gameMatch[1]) : null;
-  return gameId ? <GameView me={me} gameId={gameId} /> : <GameList me={me} />;
+  const clueId = gameMatch?.[2] ? decodeURIComponent(gameMatch[2]) : null;
+  return gameId
+    ? <GameView me={me} gameId={gameId} clueId={clueId} />
+    : <GameList me={me} />;
 }
 
 function PlayerHeader({ me }: { me: Me }) {
@@ -207,7 +272,14 @@ function GameList({ me }: { me: Me }) {
               return (
                 <a className="game-card" href={`/games/${game.id}`} key={game.id}>
                   <div className="game-card__top">
-                    <StatusBadge status={game.status} />
+                    {game.clue_count > 0 &&
+                    game.completed_count === game.clue_count ? (
+                      <span className="game-card__complete">
+                        <CheckCircle2 /> Completed
+                      </span>
+                    ) : (
+                      <StatusBadge status={game.status} />
+                    )}
                     <ChevronRight />
                   </div>
                   <div className="game-card__icon"><Map /></div>
@@ -227,24 +299,33 @@ function GameList({ me }: { me: Me }) {
   );
 }
 
-function GameView({ me, gameId }: { me: Me; gameId: string }) {
+function GameView({
+  me,
+  gameId,
+  clueId,
+}: {
+  me: Me;
+  gameId: string;
+  clueId: string | null;
+}) {
   const [code, setCode] = useState("");
-  const [freshRevealId, setFreshRevealId] = useState<string | null>(null);
-  const revealRef = useRef<HTMLElement>(null);
+  const [celebration, setCelebration] = useState<{
+    clueId: string;
+    grandFinale: boolean;
+  } | null>(null);
+  const redirectTimerRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
   const game = useQuery({
     queryKey: ["player-game", gameId],
     queryFn: () => api<PlayerGameDetail>(`/api/v1/player/games/${gameId}`),
   });
-  const current = game.data?.clues.find((clue) => clue.status === "current");
-  const completedClues =
-    game.data?.clues.filter((clue) => clue.status === "completed") ?? [];
-  const latestCompleted = completedClues.at(-1);
-  const earlierCompleted = completedClues.slice(0, -1);
+  const selectedClue = clueId
+    ? game.data?.clues.find((clue) => clue.id === clueId)
+    : null;
   const complete = useMutation({
     mutationFn: () =>
       postJson<{ created: boolean; game: PlayerGameDetail }>(
-        `/api/v1/player/games/${gameId}/clues/${current?.id}/complete`,
+        `/api/v1/player/games/${gameId}/clues/${selectedClue?.id}/complete`,
         { code },
       ),
     onSuccess: (result) => {
@@ -252,22 +333,25 @@ function GameView({ me, gameId }: { me: Me; gameId: string }) {
       queryClient.invalidateQueries({ queryKey: ["player-games"] });
       setCode("");
       if (result.created) {
-        const revealed = result.game.clues.filter(
-          (clue) => clue.status === "completed",
-        ).at(-1);
-        setFreshRevealId(revealed?.id ?? null);
+        setCelebration({
+          clueId: selectedClue?.id ?? "",
+          grandFinale: result.game.complete,
+        });
+        redirectTimerRef.current = window.setTimeout(
+          () => window.location.assign(`/games/${encodeURIComponent(gameId)}`),
+          result.game.complete ? 2600 : 1500,
+        );
       }
     },
   });
 
   useEffect(() => {
-    if (!freshRevealId || latestCompleted?.id !== freshRevealId) return;
-    const frame = window.requestAnimationFrame(() => {
-      revealRef.current?.focus({ preventScroll: true });
-      revealRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [freshRevealId, latestCompleted?.id]);
+    return () => {
+      if (redirectTimerRef.current !== null) {
+        window.clearTimeout(redirectTimerRef.current);
+      }
+    };
+  }, []);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -276,12 +360,31 @@ function GameView({ me, gameId }: { me: Me; gameId: string }) {
 
   return (
     <div className="player-shell">
-      {freshRevealId && (
-        <ClueConfetti key={freshRevealId} grandFinale={game.data?.complete} />
+      {celebration && (
+        <>
+          <ClueConfetti
+            key={celebration.clueId}
+            grandFinale={celebration.grandFinale}
+          />
+          <div className={`solve-celebration ${celebration.grandFinale ? "solve-celebration--finale" : ""}`} role="status">
+            {celebration.grandFinale ? <Trophy /> : <CheckCircle2 />}
+            <strong>{celebration.grandFinale ? "You did it!" : "Clue solved!"}</strong>
+            <span>
+              {celebration.grandFinale
+                ? "You completed every clue."
+                : "Returning to the clue list…"}
+            </span>
+          </div>
+        </>
       )}
       <PlayerHeader me={me} />
       <main className="hunt-main">
-        <a className="back-link" href="/"><ArrowLeft /> All games</a>
+        <a
+          className="back-link"
+          href={clueId ? `/games/${encodeURIComponent(gameId)}` : "/"}
+        >
+          <ArrowLeft /> {clueId ? "Back to clue list" : "All games"}
+        </a>
         {game.isLoading ? (
           <div className="hunt-card skeleton" />
         ) : game.isError || !game.data ? (
@@ -296,97 +399,45 @@ function GameView({ me, gameId }: { me: Me; gameId: string }) {
               </div>
               <div className="hunt-score">
                 <strong>{game.data.completed_count}</strong>
-                <span>of {game.data.clue_count}<br />unlocked</span>
+                <span>of {game.data.clue_count}<br />solved</span>
               </div>
             </header>
             {game.data.instructions && (
               <aside className="instructions"><ShieldCheck /> <span>{game.data.instructions}</span></aside>
             )}
-            {latestCompleted && (
-              <section
-                className={`reveal-card ${freshRevealId === latestCompleted.id ? "reveal-card--fresh" : ""}`}
-                ref={revealRef}
-                tabIndex={-1}
-                aria-live="polite"
-              >
-                <header className="reveal-card__head">
-                  <span><CheckCircle2 /> Answer revealed</span>
-                  <small>{game.data.completed_count} of {game.data.clue_count}</small>
-                </header>
-                <div className="reveal-card__body">
-                  <div className="eyebrow">Clue {latestCompleted.position}</div>
-                  <h2>{latestCompleted.clue}</h2>
-                  <ClueMediaAttachments
-                    photo={latestCompleted.photo}
-                    video={latestCompleted.video}
-                    clueTitle={latestCompleted.clue}
-                  />
-                  <div className="reveal-card__answer">
-                    <div className="eyebrow">Answer</div>
-                    <p>{latestCompleted.answer}</p>
-                  </div>
+            {!clueId && game.data.complete && (
+              <section className="completion-banner" role="status">
+                <PartyPopper aria-hidden="true" />
+                <div>
+                  <div className="eyebrow">Game complete</div>
+                  <h2>You did it!</h2>
+                  <p>
+                    {game.data.closing_message ||
+                      "You solved every clue in this game. Nice work."}
+                  </p>
                 </div>
+                <Trophy aria-hidden="true" />
               </section>
             )}
-            {game.data.complete ? (
-              <section className="completion-card">
-                <PartyPopper />
-                <div className="eyebrow">Hunt complete</div>
-                <h2>You found them all!</h2>
-                <p>
-                  {game.data.closing_message ||
-                    "You unlocked every clue in this game. Nice work."}
-                </p>
-              </section>
-            ) : current && game.data.status === "open" ? (
-              <CurrentClueCard
-                current={current}
+            {clueId && selectedClue ? (
+              <ClueDetailCard
+                clue={selectedClue}
                 clueCount={game.data.clue_count}
+                gameStatus={game.data.status}
                 code={code}
-                busy={complete.isPending}
+                busy={complete.isPending || Boolean(celebration)}
                 error={complete.error}
                 onCodeChange={setCode}
                 onSubmit={submit}
               />
-            ) : game.data.status === "open" && game.data.clue_count === 0 ? (
-              <section className="closed-notice">
-                <Flag />
-                <div><h2>Clues are being prepared</h2><p>Check back soon for the first stop.</p></div>
-              </section>
+            ) : clueId ? (
+              <EmptyState icon={<Flag />} title="Clue not found">
+                This clue is not part of this game. Return to the clue list and
+                choose another one.
+              </EmptyState>
+            ) : game.data.clue_count ? (
+              <ClueList gameId={gameId} clues={game.data.clues} />
             ) : (
-              <section className="closed-notice">
-                <LockKeyhole />
-                <div><h2>This game is closed</h2><p>Your most recently unlocked clue remains above.</p></div>
-              </section>
-            )}
-            {earlierCompleted.length > 0 && (
-              <section className="clue-timeline">
-                <div className="section-title">
-                  <div className="eyebrow">Your trail</div>
-                  <h2>Earlier clues</h2>
-                </div>
-                {earlierCompleted.map((clue) => (
-                  <article className="clue-row clue-row--completed" key={clue.position}>
-                  <div className="clue-row__marker">
-                    <Check />
-                  </div>
-                  <div>
-                    <span className="clue-row__label">Clue {clue.position}</span>
-                    <h3>{clue.clue}</h3>
-                    <ClueMediaAttachments
-                      photo={clue.photo}
-                      video={clue.video}
-                      clueTitle={clue.clue}
-                    />
-                    <strong className="clue-row__answer-label">Answer</strong>
-                    <p>{clue.answer}</p>
-                    <small><CheckCircle2 /> Unlocked</small>
-                  </div>
-                </article>
-                ))}
-              </section>
-            )}
-            {!game.data.clue_count && (
               <EmptyState icon={<Flag />} title="No clues configured">
                 This game does not have any clues yet.
               </EmptyState>

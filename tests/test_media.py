@@ -9,7 +9,6 @@ from pdcscavengerhunt.cloudflare_media import StreamVideo
 from pdcscavengerhunt.models import (
     AuditEvent,
     Clue,
-    ClueCompletion,
     ClueMedia,
     Game,
     GamePlayer,
@@ -215,35 +214,26 @@ async def test_admin_uploads_cloudflare_media_and_player_gets_private_redirects(
         assert "clue.media_attached" in actions
 
 
-async def test_media_is_hidden_until_player_reaches_clue(app, admin):
+async def test_media_is_available_for_any_clue_to_assigned_players(app, admin):
     provider = FakeMediaProvider()
     app.ctx.media = provider
-    player, stranger, _game, membership, clues = await make_media_game(app)
+    player, stranger, _game, _membership, clues = await make_media_game(app)
     _request, uploaded = await upload_media(
         app, admin, provider, clues[1], "photo", PHOTO_BYTES, "image/png", "future.png"
     )
 
     player_cookies, _headers = auth(app, player)
-    _request, unavailable = await app.asgi_client.get(
+    _request, available = await app.asgi_client.get(
         uploaded.json["url"],
         cookies=player_cookies,
     )
-    assert unavailable.status == 404
+    assert available.status == 302
     stranger_cookies, _headers = auth(app, stranger)
     _request, unassigned = await app.asgi_client.get(
         uploaded.json["url"],
         cookies=stranger_cookies,
     )
     assert unassigned.status == 404
-
-    async with app.ctx.db.session() as db:
-        db.add(ClueCompletion(game_player_id=membership.id, clue_id=clues[0].id))
-    _request, available = await app.asgi_client.get(
-        uploaded.json["url"],
-        cookies=player_cookies,
-    )
-    assert available.status == 302
-
 
 async def test_replacing_removing_and_deleting_media_cleans_up_cloudflare(
     app,

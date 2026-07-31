@@ -18,10 +18,10 @@ export interface PlayerGame {
 }
 
 export interface PlayerClue {
-  id?: string;
+  id: string;
   position: number;
-  status: "completed" | "current" | "locked";
-  clue?: string;
+  status: "completed" | "available";
+  clue: string;
   answer?: string;
   completed_at?: string;
   photo?: ClueMedia | null;

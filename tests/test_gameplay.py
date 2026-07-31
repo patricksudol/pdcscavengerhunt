@@ -59,7 +59,7 @@ async def make_game(app, admin):
     return player, stranger, game
 
 
-async def test_game_state_exposes_current_clue_but_not_its_answer(app, admin):
+async def test_game_state_exposes_all_clue_headlines_but_not_their_answers(app, admin):
     player, _stranger, game = await make_game(app, admin)
     cookies, _headers = auth(app, player)
     _request, response = await app.asgi_client.get(
@@ -72,12 +72,19 @@ async def test_game_state_exposes_current_clue_but_not_its_answer(app, admin):
         {
             "id": response.json["clues"][0]["id"],
             "position": 1,
-            "status": "current",
+            "status": "available",
             "clue": "First Reveal",
             "photo": None,
             "video": None,
         },
-        {"position": 2, "status": "locked"},
+        {
+            "id": response.json["clues"][1]["id"],
+            "position": 2,
+            "status": "available",
+            "clue": "Second Reveal",
+            "photo": None,
+            "video": None,
+        },
     ]
     assert "Walk to the clock." not in response.text
     assert "Find the mural." not in response.text
@@ -85,7 +92,7 @@ async def test_game_state_exposes_current_clue_but_not_its_answer(app, admin):
     assert "MURAL-2" not in response.text
 
 
-async def test_player_must_complete_clues_in_order(app, admin):
+async def test_player_can_complete_clues_in_any_order(app, admin):
     player, _stranger, game = await make_game(app, admin)
     cookies, headers = auth(app, player)
     async with app.ctx.db.session() as db:
@@ -97,13 +104,18 @@ async def test_player_must_complete_clues_in_order(app, admin):
             ).all()
         )
 
-    _request, out_of_order = await app.asgi_client.post(
+    _request, second = await app.asgi_client.post(
         f"/api/v1/player/games/{game.id}/clues/{clues[1].id}/complete",
-        json={"code": "MURAL-2"},
+        json={"code": " mural-2 "},
         cookies=cookies,
         headers=headers,
     )
-    assert out_of_order.status == 409
+    assert second.status == 200
+    assert second.json["created"] is True
+    assert second.json["game"]["clues"][0]["status"] == "available"
+    assert second.json["game"]["clues"][1]["status"] == "completed"
+    assert second.json["game"]["clues"][1]["answer"] == "Find the mural."
+    assert second.json["game"]["complete"] is False
 
     _request, wrong = await app.asgi_client.post(
         f"/api/v1/player/games/{game.id}/clues/{clues[0].id}/complete",
@@ -123,9 +135,11 @@ async def test_player_must_complete_clues_in_order(app, admin):
     assert first.status == 200
     assert first.json["created"] is True
     assert first.json["game"]["clues"][0]["answer"] == "Walk to the clock."
-    assert first.json["game"]["clues"][1]["status"] == "current"
+    assert first.json["game"]["clues"][1]["status"] == "completed"
     assert first.json["game"]["clues"][1]["clue"] == "Second Reveal"
-    assert "answer" not in first.json["game"]["clues"][1]
+    assert first.json["game"]["clues"][1]["answer"] == "Find the mural."
+    assert first.json["game"]["complete"] is True
+    assert first.json["game"]["closing_message"] == "Thanks for playing!"
 
     _request, duplicate = await app.asgi_client.post(
         f"/api/v1/player/games/{game.id}/clues/{clues[0].id}/complete",
@@ -136,15 +150,14 @@ async def test_player_must_complete_clues_in_order(app, admin):
     assert duplicate.status == 200
     assert duplicate.json["created"] is False
 
-    _request, second = await app.asgi_client.post(
+    _request, duplicate_second = await app.asgi_client.post(
         f"/api/v1/player/games/{game.id}/clues/{clues[1].id}/complete",
         json={"code": "mural-2"},
         cookies=cookies,
         headers=headers,
     )
-    assert second.status == 200
-    assert second.json["game"]["complete"] is True
-    assert second.json["game"]["closing_message"] == "Thanks for playing!"
+    assert duplicate_second.status == 200
+    assert duplicate_second.json["created"] is False
 
     async with app.ctx.db.session() as db:
         assert await db.scalar(select(ClueCompletion).limit(1))

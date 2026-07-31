@@ -143,7 +143,7 @@ function Overview() {
       <section className="stat-grid">
         <Stat icon={<Users />} value={data.data?.users ?? "—"} label="Active players" color="blue" />
         <Stat icon={<Gamepad2 />} value={data.data?.games ?? "—"} label="Total games" color="purple" />
-        <Stat icon={<ListChecks />} value={data.data?.completions ?? "—"} label="Clues unlocked" color="lime" />
+        <Stat icon={<ListChecks />} value={data.data?.completions ?? "—"} label="Clues solved" color="lime" />
         <Stat icon={<Shield />} value={data.data?.open_games ?? "—"} label="Open games" color="gold" />
       </section>
       <section className="welcome-panel">
@@ -727,7 +727,7 @@ function GameEditor({ gameId, onClose }: { gameId: string; onClose: () => void }
           detail.isError || !detail.data ? <ErrorMessage error={detail.error} /> :
           tab === "clues" ? (
             <div className="drawer-section">
-              <div className="drawer-section__title"><div><h3>Clue order</h3><p>Drag clues into order. Players unlock them from top to bottom.</p></div><Button onClick={() => setEditingClue("new")}><Plus /> Add clue</Button></div>
+              <div className="drawer-section__title"><div><h3>Clue order</h3><p>Drag clues into display order. Players can choose any clue.</p></div><Button onClick={() => setEditingClue("new")}><Plus /> Add clue</Button></div>
               {!detail.data.clues.length ? <EmptyState icon={<LockKeyhole />} title="No clues">Add the first clue and its unique code.</EmptyState> :
                 <DndContext
                   sensors={sensors}

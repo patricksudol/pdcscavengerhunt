@@ -1,8 +1,8 @@
 # PDC Scavenger Hunt
 
-A mobile-first, sequential scavenger hunt application for the Phoenixville
-Democratic Committee. Players join games by invitation and reveal clues in order
-by entering the unique code found at each stop.
+A mobile-first scavenger hunt application for the Phoenixville Democratic
+Committee. Players join games by invitation, choose clues from a list, and
+reveal answers by entering the unique code found at each stop.
 
 ## Stack
 
@@ -23,10 +23,9 @@ container.
 - A user sees only non-draft games to which they are assigned.
 - Games may be `draft`, `open`, or `closed`; more than one game can be open.
 - Clues have a numbered order that administrators can rearrange.
-- A player receives the current clue text, but its answer and all later clues remain
-  absent from player API responses.
-- A correct code reveals that clue's answer and unlocks the next clue only after
-  all earlier clues have been completed.
+- A player can see every clue headline and choose the clues in any order.
+- A clue's answer remains absent from player API responses until its code has
+  been entered correctly.
 - Closed games preserve revealed clues but do not accept new completions.
 - Administrators are ordinary users with `is_admin` enabled and may also play.
 
@@ -136,9 +135,9 @@ Sign in and open `/admin`.
 6. Drag clues by their grip handles to change the order; up/down buttons remain
    available as an accessible fallback.
 7. Copy current codes from the clue list.
-8. Use the Progress tab to monitor players, advance a player to a later clue,
-   return a player to a completed clue, or restart their entire game. Every
-   progress adjustment requires an audit reason.
+8. Use the Progress tab to monitor players, mark a run of clues complete, return
+   a player to a completed clue, or restart their entire game. Every progress
+   adjustment requires an audit reason.
 
 Invitation links expire after 24 hours, can be used once, and are invalidated
 when a replacement link is generated. No email provider is included; links
@@ -146,9 +145,9 @@ should be sent through a trusted channel.
 
 ## Clue photos and videos
 
-Each clue can have at most one photo and one video. Media is shown only when that
-clue is available to the signed-in player. Administrators can upload, replace,
-preview, and remove attachments from the clue editor.
+Each clue can have at most one photo and one video. Media is shown only to a
+signed-in player assigned to that clue's game. Administrators can upload,
+replace, preview, and remove attachments from the clue editor.
 
 - Photos: JPEG, PNG, or WebP, up to 8 MiB
 - Videos: MP4 or MOV, up to 100 MiB

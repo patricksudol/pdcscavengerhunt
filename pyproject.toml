@@ -1,7 +1,7 @@
 [project]
 name = "pdcscavengerhunt"
 version = "0.1.0"
-description = "A sequential scavenger hunt game for the Phoenixville Democratic Committee"
+description = "A flexible scavenger hunt game for the Phoenixville Democratic Committee"
 readme = "README.md"
 requires-python = ">=3.14,<3.15"
 dependencies = [

@@ -4,7 +4,7 @@ import hmac
 from uuid import UUID
 
 from sanic import Blueprint, Request
-from sanic.exceptions import Forbidden, InvalidUsage, NotFound, SanicException
+from sanic.exceptions import Forbidden, InvalidUsage, NotFound
 from sqlalchemy import func, select
 
 from .media_status import refresh_processing_videos
@@ -89,13 +89,9 @@ async def game_state(
             "url": f"/api/v1/media/{media.id}",
         }
 
-    first_incomplete = next(
-        (index for index, clue in enumerate(clues) if clue.id not in completion_map),
-        len(clues),
-    )
     is_complete = bool(clues) and len(completions) == len(clues)
     clue_data = []
-    for index, clue in enumerate(clues):
+    for clue in clues:
         completion = completion_map.get(clue.id)
         if completion:
             clue_data.append(
@@ -110,19 +106,17 @@ async def game_state(
                     "video": media_for(clue, MediaType.video),
                 }
             )
-        elif index == first_incomplete:
+        else:
             clue_data.append(
                 {
                     "id": str(clue.id),
                     "position": clue.position,
-                    "status": "current",
+                    "status": "available",
                     "clue": clue.title,
                     "photo": media_for(clue, MediaType.photo),
                     "video": media_for(clue, MediaType.video),
                 }
             )
-        else:
-            clue_data.append({"position": clue.position, "status": "locked"})
     return {
         "id": str(game.id),
         "title": game.title,
@@ -233,9 +227,6 @@ async def complete_clue(request: Request, game_id: UUID, clue_id: UUID):
                 "created": False,
                 "game": await game_state(request, db, game, membership),
             }
-        next_clue = next((clue for clue in clues if clue.id not in completed_ids), None)
-        if not next_clue or next_clue.id != target.id:
-            raise SanicException("Complete the earlier clues first", status_code=409)
         submitted = fingerprint_code(payload.code, request.app.ctx.settings)
         if not hmac.compare_digest(submitted, target.code_fingerprint):
             db.add(

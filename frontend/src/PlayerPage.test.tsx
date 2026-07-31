@@ -1,22 +1,25 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ClueMediaAttachments, CurrentClueCard } from "./PlayerPage";
+import { ClueDetailCard, ClueList, ClueMediaAttachments } from "./PlayerPage";
 
-describe("current clue card", () => {
-  it("presents the active clue as the primary action area", () => {
+afterEach(cleanup);
+
+describe("clue detail card", () => {
+  it("presents a selected available clue as the primary action area", () => {
     const onCodeChange = vi.fn();
     const onSubmit = vi.fn();
 
     render(
-      <CurrentClueCard
-        current={{
+      <ClueDetailCard
+        clue={{
           id: "clue-2",
           position: 2,
-          status: "current",
+          status: "available",
           clue: "Look beneath the town clock",
         }}
         clueCount={5}
+        gameStatus="open"
         code=""
         busy={false}
         error={null}
@@ -25,7 +28,7 @@ describe("current clue card", () => {
       />,
     );
 
-    expect(screen.getByText("Current clue")).toBeInTheDocument();
+    expect(screen.getByText("Your selected clue")).toBeInTheDocument();
     expect(screen.getByText("Clue 2 of 5")).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Look beneath the town clock" }),
@@ -35,6 +38,61 @@ describe("current clue card", () => {
       target: { value: "CLOCK" },
     });
     expect(onCodeChange).toHaveBeenCalledWith("CLOCK");
+  });
+
+  it("shows the revealed answer instead of a code form for a solved clue", () => {
+    render(
+      <ClueDetailCard
+        clue={{
+          id: "clue-1",
+          position: 1,
+          status: "completed",
+          clue: "Start at the clock",
+          answer: "Walk to the clock.",
+        }}
+        clueCount={2}
+        gameStatus="open"
+        code=""
+        busy={false}
+        error={null}
+        onCodeChange={vi.fn()}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Clue solved")).toBeInTheDocument();
+    expect(screen.getByText("Walk to the clock.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Solve clue" })).not.toBeInTheDocument();
+  });
+});
+
+describe("clue list", () => {
+  it("shows thin selectable rows for every clue and marks solved clues", () => {
+    render(
+      <ClueList
+        gameId="game-1"
+        clues={[
+          {
+            id: "clue-1",
+            position: 1,
+            status: "available",
+            clue: "Find the clock",
+          },
+          {
+            id: "clue-2",
+            position: 2,
+            status: "completed",
+            clue: "Spot the mural",
+            answer: "The blue wall",
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: /Clue 1 Find the clock View clue/ }))
+      .toHaveAttribute("href", "/games/game-1/clues/clue-1");
+    expect(screen.getByRole("link", { name: /Clue 2 Spot the mural Solved/ }))
+      .toHaveAttribute("href", "/games/game-1/clues/clue-2");
   });
 });
 
