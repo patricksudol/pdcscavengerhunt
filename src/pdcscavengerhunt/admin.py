@@ -20,6 +20,9 @@ from .models import (
     ClueMedia,
     Game,
     GamePlayer,
+    Hint,
+    HintMedia,
+    HintReveal,
     MediaType,
     PasswordSetupToken,
     User,
@@ -30,6 +33,9 @@ from .schemas import (
     ClueUpdate,
     GameCreate,
     GameUpdate,
+    HintCreate,
+    HintReorder,
+    HintUpdate,
     MembershipUpdate,
     ProgressAdvance,
     ProgressReset,
@@ -121,7 +127,7 @@ def audit_subject_id(event: AuditEvent) -> UUID | None:
         return None
 
 
-def media_json(media: ClueMedia) -> dict:
+def media_json(media: ClueMedia | HintMedia) -> dict:
     return {
         "id": str(media.id),
         "media_type": media.media_type.value,
@@ -134,7 +140,30 @@ def media_json(media: ClueMedia) -> dict:
     }
 
 
-def clue_json(clue: Clue, media: list[ClueMedia] | None = None) -> dict:
+def hint_json(hint: Hint, media: list[HintMedia] | None = None) -> dict:
+    by_type = {item.media_type: item for item in media or []}
+    return {
+        "id": str(hint.id),
+        "position": hint.position,
+        "text": hint.text,
+        "photo": (
+            media_json(by_type[MediaType.photo])
+            if MediaType.photo in by_type
+            else None
+        ),
+        "video": (
+            media_json(by_type[MediaType.video])
+            if MediaType.video in by_type
+            else None
+        ),
+    }
+
+
+def clue_json(
+    clue: Clue,
+    media: list[ClueMedia] | None = None,
+    hints: list[dict] | None = None,
+) -> dict:
     by_type = {item.media_type: item for item in media or []}
     return {
         "id": str(clue.id),
@@ -153,10 +182,11 @@ def clue_json(clue: Clue, media: list[ClueMedia] | None = None) -> dict:
             if MediaType.video in by_type
             else None
         ),
+        "hints": hints or [],
     }
 
 
-def media_audit_json(media: ClueMedia) -> dict:
+def media_audit_json(media: ClueMedia | HintMedia) -> dict:
     return {
         "id": str(media.id),
         "media_type": media.media_type.value,
@@ -603,6 +633,33 @@ async def get_game(request: Request, game_id: UUID):
         media_by_clue: dict[UUID, list[ClueMedia]] = {}
         for media in clue_media:
             media_by_clue.setdefault(media.clue_id, []).append(media)
+        hints = list(
+            (
+                await db.scalars(
+                    select(Hint)
+                    .where(Hint.clue_id.in_([clue.id for clue in clues]))
+                    .order_by(Hint.clue_id, Hint.position)
+                )
+            ).all()
+        )
+        hint_media = list(
+            (
+                await db.scalars(
+                    select(HintMedia).where(
+                        HintMedia.hint_id.in_([hint.id for hint in hints])
+                    )
+                )
+            ).all()
+        )
+        await refresh_processing_videos(request, db, hint_media)
+        media_by_hint: dict[UUID, list[HintMedia]] = {}
+        for media in hint_media:
+            media_by_hint.setdefault(media.hint_id, []).append(media)
+        hints_by_clue: dict[UUID, list[dict]] = {}
+        for hint in hints:
+            hints_by_clue.setdefault(hint.clue_id, []).append(
+                hint_json(hint, media_by_hint.get(hint.id))
+            )
         members = list(
             (
                 await db.execute(
@@ -680,7 +737,12 @@ async def get_game(request: Request, game_id: UUID):
                 completion_count=sum(item["completed_count"] for item in progress),
             ),
             "clues": [
-                clue_json(clue, media_by_clue.get(clue.id)) for clue in clues
+                clue_json(
+                    clue,
+                    media_by_clue.get(clue.id),
+                    hints_by_clue.get(clue.id),
+                )
+                for clue in clues
             ],
             "players": progress,
         }
@@ -848,7 +910,196 @@ async def update_clue(request: Request, clue_id: UUID):
                 )
             ).all()
         )
-        return clue_json(clue, clue_media)
+        hints = list(
+            (
+                await db.scalars(
+                    select(Hint).where(Hint.clue_id == clue.id).order_by(Hint.position)
+                )
+            ).all()
+        )
+        hint_media = list(
+            (
+                await db.scalars(
+                    select(HintMedia).where(
+                        HintMedia.hint_id.in_([hint.id for hint in hints])
+                    )
+                )
+            ).all()
+        )
+        media_by_hint: dict[UUID, list[HintMedia]] = {}
+        for media in hint_media:
+            media_by_hint.setdefault(media.hint_id, []).append(media)
+        return clue_json(
+            clue,
+            clue_media,
+            [hint_json(hint, media_by_hint.get(hint.id)) for hint in hints],
+        )
+
+
+@admin_bp.post("/clues/<clue_id:uuid>/hints")
+@login_required(admin=True)
+async def create_hint(request: Request, clue_id: UUID):
+    payload = HintCreate.model_validate(request.json or {})
+    text = payload.text.strip() if payload.text and payload.text.strip() else None
+    async with request.app.ctx.db.session() as db:
+        clue = await db.get(Clue, clue_id)
+        if not clue:
+            raise NotFound("Clue not found")
+        max_position = await db.scalar(
+            select(func.max(Hint.position)).where(Hint.clue_id == clue.id)
+        )
+        hint = Hint(
+            clue_id=clue.id,
+            position=(max_position or 0) + 1,
+            text=text,
+        )
+        db.add(hint)
+        await db.flush()
+        db.add(
+            audit(
+                request,
+                action="hint.created",
+                entity_type="hint",
+                entity_id=str(hint.id),
+                after={
+                    "clue_id": str(clue.id),
+                    "position": hint.position,
+                    "has_text": hint.text is not None,
+                },
+            )
+        )
+        return hint_json(hint), 201
+
+
+@admin_bp.patch("/hints/<hint_id:uuid>")
+@login_required(admin=True)
+async def update_hint(request: Request, hint_id: UUID):
+    payload = HintUpdate.model_validate(request.json or {})
+    async with request.app.ctx.db.session() as db:
+        hint = await db.get(Hint, hint_id)
+        if not hint:
+            raise NotFound("Hint not found")
+        before = {"text": hint.text}
+        if "text" in payload.model_fields_set:
+            hint.text = (
+                payload.text.strip()
+                if payload.text and payload.text.strip()
+                else None
+            )
+        await db.flush()
+        db.add(
+            audit(
+                request,
+                action="hint.updated",
+                entity_type="hint",
+                entity_id=str(hint.id),
+                before=before,
+                after={"text": hint.text},
+            )
+        )
+        media = list(
+            (
+                await db.scalars(
+                    select(HintMedia).where(HintMedia.hint_id == hint.id)
+                )
+            ).all()
+        )
+        return hint_json(hint, media)
+
+
+@admin_bp.post("/clues/<clue_id:uuid>/hints/reorder")
+@login_required(admin=True)
+async def reorder_hints(request: Request, clue_id: UUID):
+    payload = HintReorder.model_validate(request.json or {})
+    try:
+        ids = [UUID(value) for value in payload.hint_ids]
+    except ValueError as error:
+        raise InvalidUsage("One or more hint IDs are invalid") from error
+    if len(ids) != len(set(ids)):
+        raise InvalidUsage("Each hint must appear exactly once")
+    async with request.app.ctx.db.session() as db:
+        hints = list(
+            (
+                await db.scalars(
+                    select(Hint)
+                    .where(Hint.clue_id == clue_id)
+                    .order_by(Hint.position)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        if not hints:
+            raise NotFound("Clue hints not found")
+        if set(ids) != {hint.id for hint in hints}:
+            raise InvalidUsage("The order must include every hint for the clue")
+        by_id = {hint.id: hint for hint in hints}
+        offset = len(hints) + 1000
+        for hint in hints:
+            hint.position += offset
+        await db.flush()
+        for position, hint_id in enumerate(ids, start=1):
+            by_id[hint_id].position = position
+        db.add(
+            audit(
+                request,
+                action="hints.reordered",
+                entity_type="clue",
+                entity_id=str(clue_id),
+                after={"hint_ids": payload.hint_ids},
+            )
+        )
+        return {"hint_ids": payload.hint_ids}
+
+
+@admin_bp.delete("/hints/<hint_id:uuid>")
+@login_required(admin=True)
+async def delete_hint(request: Request, hint_id: UUID):
+    async with request.app.ctx.db.session() as db:
+        hint = await db.get(Hint, hint_id)
+        if not hint:
+            raise NotFound("Hint not found")
+        clue_id = hint.clue_id
+        position = hint.position
+        attached_media = list(
+            (
+                await db.execute(
+                    select(HintMedia.media_type, HintMedia.provider_key).where(
+                        HintMedia.hint_id == hint.id
+                    )
+                )
+            ).tuples()
+        )
+        await db.delete(hint)
+        await db.flush()
+        affected = list(
+            (
+                await db.scalars(
+                    select(Hint)
+                    .where(Hint.clue_id == clue_id, Hint.position > position)
+                    .order_by(Hint.position)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        original_positions = {item.id: item.position for item in affected}
+        offset = len(affected) + 1000
+        for item in affected:
+            item.position += offset
+        await db.flush()
+        for item in affected:
+            item.position = original_positions[item.id] - 1
+        db.add(
+            audit(
+                request,
+                action="hint.deleted",
+                entity_type="hint",
+                entity_id=str(hint_id),
+                before={"clue_id": str(clue_id), "position": position},
+            )
+        )
+    for attached_type, provider_key in attached_media:
+        await delete_provider_media(request, attached_type, provider_key)
+    return {"deleted": True}
 
 
 @admin_bp.put("/clues/<clue_id:uuid>/media/<media_type:str>")
@@ -1059,6 +1310,205 @@ async def delete_clue_media(request: Request, clue_id: UUID, media_type: str):
     return {"deleted": True}
 
 
+@admin_bp.put("/hints/<hint_id:uuid>/media/<media_type:str>")
+@login_required(admin=True)
+async def upload_hint_media(
+    request: Request,
+    hint_id: UUID,
+    media_type: str,
+):
+    try:
+        selected_type = MediaType(media_type)
+    except ValueError as error:
+        raise NotFound("Media type not found") from error
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+    extension = MEDIA_CONTENT_TYPES[selected_type].get(content_type)
+    if not extension:
+        allowed = ", ".join(MEDIA_CONTENT_TYPES[selected_type])
+        raise InvalidUsage(f"Unsupported {selected_type.value} type. Use {allowed}")
+    content = request.body
+    size_bytes = len(content)
+    if not content:
+        raise InvalidUsage("The selected media file is empty")
+    max_bytes = (
+        request.app.ctx.settings.photo_max_bytes
+        if selected_type == MediaType.photo
+        else request.app.ctx.settings.video_max_bytes
+    )
+    if size_bytes > max_bytes:
+        limit_mib = max_bytes // (1024 * 1024)
+        raise SanicException(
+            f"{selected_type.value.title()} files cannot exceed {limit_mib} MiB",
+            status_code=413,
+        )
+    if not valid_media_signature(selected_type, content_type, content[:32]):
+        raise InvalidUsage(
+            f"The uploaded file content is not a valid {selected_type.value}"
+        )
+
+    supplied_name = unquote(request.headers.get("x-file-name", ""))
+    original_filename = "".join(
+        character
+        for character in supplied_name.replace("\\", "/").rsplit("/", 1)[-1]
+        if ord(character) >= 32
+    )[:255] or f"hint-{selected_type.value}{extension}"
+
+    async with request.app.ctx.db.session() as db:
+        if not await db.get(Hint, hint_id):
+            raise NotFound("Hint not found")
+
+    logger.info(
+        "event=hint_media_upload_started request_id=%s hint_id=%s media_type=%s "
+        "size_bytes=%s actor_id=%s",
+        request.ctx.request_id,
+        hint_id,
+        selected_type.value,
+        size_bytes,
+        request.ctx.user.id,
+    )
+    provider_key = None
+    try:
+        if selected_type == MediaType.photo:
+            provider_key = f"hint-photos/{hint_id}/{uuid4().hex}{extension}"
+            await request.app.ctx.media.upload_photo(
+                provider_key,
+                content,
+                content_type,
+            )
+            actual_size = size_bytes
+            status = "ready"
+        else:
+            provider_key = await request.app.ctx.media.upload_video(
+                clue_id=f"hint-{hint_id}",
+                original_filename=original_filename,
+                content=content,
+                content_type=content_type,
+            )
+            video = await request.app.ctx.media.video_details(provider_key)
+            actual_size = video.size_bytes or size_bytes
+            await request.app.ctx.media.secure_video(provider_key)
+            status = video.status
+    except MediaProviderError as error:
+        logger.exception(
+            "event=hint_media_upload_failed request_id=%s hint_id=%s "
+            "media_type=%s size_bytes=%s",
+            request.ctx.request_id,
+            hint_id,
+            selected_type.value,
+            size_bytes,
+        )
+        await delete_provider_media(request, selected_type, provider_key)
+        raise SanicException(str(error), status_code=502) from error
+
+    old_provider_key = None
+    created = False
+    try:
+        async with request.app.ctx.db.session() as db:
+            hint = await db.scalar(
+                select(Hint).where(Hint.id == hint_id).with_for_update()
+            )
+            if not hint:
+                raise NotFound("Hint not found")
+            media = await db.scalar(
+                select(HintMedia)
+                .where(
+                    HintMedia.hint_id == hint.id,
+                    HintMedia.media_type == selected_type,
+                )
+                .with_for_update()
+            )
+            before = media_audit_json(media) if media else None
+            if media:
+                old_provider_key = media.provider_key
+                media.provider_key = provider_key
+                media.original_filename = original_filename
+                media.content_type = content_type
+                media.size_bytes = actual_size
+                media.status = status
+                media.created_by_id = request.ctx.user.id
+            else:
+                created = True
+                media = HintMedia(
+                    hint_id=hint.id,
+                    media_type=selected_type,
+                    provider_key=provider_key,
+                    original_filename=original_filename,
+                    content_type=content_type,
+                    size_bytes=actual_size,
+                    status=status,
+                    created_by_id=request.ctx.user.id,
+                )
+                db.add(media)
+            await db.flush()
+            db.add(
+                audit(
+                    request,
+                    action=(
+                        "hint.media_attached" if created else "hint.media_replaced"
+                    ),
+                    entity_type="hint",
+                    entity_id=str(hint.id),
+                    before=before,
+                    after=media_audit_json(media),
+                )
+            )
+    except Exception:
+        await delete_provider_media(request, selected_type, provider_key)
+        raise
+    if old_provider_key and old_provider_key != provider_key:
+        await delete_provider_media(request, selected_type, old_provider_key)
+    logger.info(
+        "event=hint_media_upload_completed request_id=%s hint_id=%s media_id=%s "
+        "media_type=%s size_bytes=%s provider_status=%s operation=%s actor_id=%s",
+        request.ctx.request_id,
+        hint_id,
+        media.id,
+        selected_type.value,
+        actual_size,
+        status,
+        "attached" if created else "replaced",
+        request.ctx.user.id,
+    )
+    return media_json(media), 201 if created else 200
+
+
+@admin_bp.delete("/hints/<hint_id:uuid>/media/<media_type:str>")
+@login_required(admin=True)
+async def delete_hint_media(request: Request, hint_id: UUID, media_type: str):
+    try:
+        selected_type = MediaType(media_type)
+    except ValueError as error:
+        raise NotFound("Media type not found") from error
+    async with request.app.ctx.db.session() as db:
+        hint = await db.get(Hint, hint_id)
+        if not hint:
+            raise NotFound("Hint not found")
+        media = await db.scalar(
+            select(HintMedia)
+            .where(
+                HintMedia.hint_id == hint.id,
+                HintMedia.media_type == selected_type,
+            )
+            .with_for_update()
+        )
+        if not media:
+            raise NotFound(f"Hint {selected_type.value} not found")
+        provider_key = media.provider_key
+        before = media_audit_json(media)
+        await db.delete(media)
+        db.add(
+            audit(
+                request,
+                action="hint.media_removed",
+                entity_type="hint",
+                entity_id=str(hint.id),
+                before=before,
+            )
+        )
+    await delete_provider_media(request, selected_type, provider_key)
+    return {"deleted": True}
+
+
 @admin_bp.post("/games/<game_id:uuid>/clues/reorder")
 @login_required(admin=True)
 async def reorder_clues(request: Request, game_id: UUID):
@@ -1119,6 +1569,15 @@ async def delete_clue(request: Request, clue_id: UUID):
                 )
             ).tuples()
         )
+        attached_hint_media = list(
+            (
+                await db.execute(
+                    select(HintMedia.media_type, HintMedia.provider_key)
+                    .join(Hint, Hint.id == HintMedia.hint_id)
+                    .where(Hint.clue_id == clue.id)
+                )
+            ).tuples()
+        )
         await db.delete(clue)
         await db.flush()
         affected = list(
@@ -1147,7 +1606,7 @@ async def delete_clue(request: Request, clue_id: UUID):
                 before={"game_id": str(game_id), "position": position},
             )
         )
-    for attached_type, provider_key in attached_media:
+    for attached_type, provider_key in [*attached_media, *attached_hint_media]:
         await delete_provider_media(request, attached_type, provider_key)
     return {"deleted": True}
 
@@ -1187,6 +1646,17 @@ async def reset_progress(request: Request, membership_id: UUID):
                 )
             )
         await db.execute(delete(ClueCompletion).where(reset_filter))
+        hint_reveal_filter = HintReveal.game_player_id == membership.id
+        if target_clue:
+            hint_reveal_filter = hint_reveal_filter & HintReveal.hint_id.in_(
+                select(Hint.id)
+                .join(Clue, Clue.id == Hint.clue_id)
+                .where(
+                    Clue.game_id == membership.game_id,
+                    Clue.position >= target_clue.position,
+                )
+            )
+        await db.execute(delete(HintReveal).where(hint_reveal_filter))
         await db.flush()
         remaining_count = (
             await db.scalar(

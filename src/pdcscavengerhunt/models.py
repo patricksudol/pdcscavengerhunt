@@ -135,6 +135,9 @@ class GamePlayer(Base):
     completions: Mapped[list[ClueCompletion]] = relationship(
         back_populates="membership", cascade="all, delete-orphan"
     )
+    hint_reveals: Mapped[list[HintReveal]] = relationship(
+        back_populates="membership", cascade="all, delete-orphan"
+    )
 
 
 class Clue(Base):
@@ -165,6 +168,38 @@ class Clue(Base):
     )
     media: Mapped[list[ClueMedia]] = relationship(
         back_populates="clue", cascade="all, delete-orphan"
+    )
+    hints: Mapped[list[Hint]] = relationship(
+        back_populates="clue",
+        cascade="all, delete-orphan",
+        order_by="Hint.position",
+    )
+
+
+class Hint(Base):
+    __tablename__ = "hints"
+    __table_args__ = (
+        UniqueConstraint("clue_id", "position", name="uq_hints_clue_position"),
+        Index("ix_hints_clue_position", "clue_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    clue_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("clues.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    clue: Mapped[Clue] = relationship(back_populates="hints")
+    media: Mapped[list[HintMedia]] = relationship(
+        back_populates="hint", cascade="all, delete-orphan"
+    )
+    reveals: Mapped[list[HintReveal]] = relationship(
+        back_populates="hint", cascade="all, delete-orphan"
     )
 
 
@@ -199,6 +234,37 @@ class ClueMedia(Base):
     clue: Mapped[Clue] = relationship(back_populates="media")
 
 
+class HintMedia(Base):
+    __tablename__ = "hint_media"
+    __table_args__ = (
+        UniqueConstraint("hint_id", "media_type", name="uq_hint_media_hint_type"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    hint_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hints.id", ondelete="CASCADE"), index=True
+    )
+    media_type: Mapped[MediaType] = mapped_column(
+        Enum(MediaType, native_enum=False), index=True
+    )
+    provider_key: Mapped[str] = mapped_column(String(255), unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(80))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(
+        String(20), default="ready", server_default="ready", index=True
+    )
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    hint: Mapped[Hint] = relationship(back_populates="media")
+
+
 class ClueCompletion(Base):
     __tablename__ = "clue_completions"
     __table_args__ = (
@@ -219,6 +285,28 @@ class ClueCompletion(Base):
 
     membership: Mapped[GamePlayer] = relationship(back_populates="completions")
     clue: Mapped[Clue] = relationship(back_populates="completions")
+
+
+class HintReveal(Base):
+    __tablename__ = "hint_reveals"
+    __table_args__ = (
+        UniqueConstraint(
+            "game_player_id", "hint_id", name="uq_hint_reveals_membership_hint"
+        ),
+        Index("ix_hint_reveals_membership_time", "game_player_id", "revealed_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    game_player_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("game_players.id", ondelete="CASCADE"), index=True
+    )
+    hint_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("hints.id", ondelete="CASCADE"), index=True
+    )
+    revealed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    membership: Mapped[GamePlayer] = relationship(back_populates="hint_reveals")
+    hint: Mapped[Hint] = relationship(back_populates="reveals")
 
 
 class AuditEvent(Base):

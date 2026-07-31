@@ -99,6 +99,7 @@ describe("admin player progress", () => {
         code_set: true,
         photo: null,
         video: null,
+        hints: [],
       })),
       players: [
         {
@@ -160,6 +161,7 @@ describe("admin player progress", () => {
           code_set: true,
           photo: null,
           video: null,
+          hints: [],
         },
       ],
       players: [
@@ -245,6 +247,7 @@ describe("admin player progress", () => {
           code_set: true,
           photo: null,
           video: null,
+          hints: [],
         },
       ],
       players: [1, 2, 3, 4].map((rank) => ({

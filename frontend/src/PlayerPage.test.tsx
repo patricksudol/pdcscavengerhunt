@@ -1,7 +1,12 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ClueDetailCard, ClueList, ClueMediaAttachments } from "./PlayerPage";
+import {
+  ClueDetailCard,
+  ClueHints,
+  ClueList,
+  ClueMediaAttachments,
+} from "./PlayerPage";
 
 afterEach(cleanup);
 
@@ -17,14 +22,18 @@ describe("clue detail card", () => {
           position: 2,
           status: "available",
           clue: "Look beneath the town clock",
+          hints: [],
         }}
         clueCount={5}
         gameStatus="open"
         code=""
         busy={false}
         error={null}
+        hintBusy={false}
+        hintError={null}
         onCodeChange={onCodeChange}
         onSubmit={onSubmit}
+        onRevealHint={vi.fn()}
       />,
     );
 
@@ -49,14 +58,18 @@ describe("clue detail card", () => {
           status: "completed",
           clue: "Start at the clock",
           answer: "Walk to the clock.",
+          hints: [],
         }}
         clueCount={2}
         gameStatus="open"
         code=""
         busy={false}
         error={null}
+        hintBusy={false}
+        hintError={null}
         onCodeChange={vi.fn()}
         onSubmit={vi.fn()}
+        onRevealHint={vi.fn()}
       />,
     );
 
@@ -77,6 +90,7 @@ describe("clue list", () => {
             position: 1,
             status: "available",
             clue: "Find the clock",
+            hints: [],
           },
           {
             id: "clue-2",
@@ -84,6 +98,7 @@ describe("clue list", () => {
             status: "completed",
             clue: "Spot the mural",
             answer: "The blue wall",
+            hints: [],
           },
         ]}
       />,
@@ -93,6 +108,36 @@ describe("clue list", () => {
       .toHaveAttribute("href", "/games/game-1/clues/clue-1");
     expect(screen.getByRole("link", { name: /Clue 2 Spot the mural Solved/ }))
       .toHaveAttribute("href", "/games/game-1/clues/clue-2");
+  });
+});
+
+describe("clue hints", () => {
+  it("shows revealed hints and only offers the next hint", () => {
+    const onReveal = vi.fn();
+    render(
+      <ClueHints
+        hints={[
+          {
+            id: "hint-1",
+            position: 1,
+            status: "revealed",
+            text: "Look toward the clock tower.",
+          },
+          { id: "hint-2", position: 2, status: "available" },
+          { position: 3, status: "locked" },
+        ]}
+        canReveal
+        busy={false}
+        error={null}
+        onReveal={onReveal}
+      />,
+    );
+
+    expect(screen.getByText("Look toward the clock tower.")).toBeInTheDocument();
+    expect(screen.getByText("1 of 3 revealed")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reveal hint" }));
+    expect(onReveal).toHaveBeenCalledWith("hint-2");
+    expect(screen.queryByText("Hint 3")).not.toBeInTheDocument();
   });
 });
 

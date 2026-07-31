@@ -59,6 +59,18 @@ class ClueReorder(BaseModel):
     clue_ids: list[str] = Field(min_length=1)
 
 
+class HintCreate(BaseModel):
+    text: str | None = Field(default=None, max_length=10000)
+
+
+class HintUpdate(BaseModel):
+    text: str | None = Field(default=None, max_length=10000)
+
+
+class HintReorder(BaseModel):
+    hint_ids: list[str] = Field(min_length=1)
+
+
 class CodeSubmission(BaseModel):
     code: str = Field(min_length=1, max_length=120)
 

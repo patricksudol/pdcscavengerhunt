@@ -26,6 +26,9 @@ container.
 - A player can see every clue headline and choose the clues in any order.
 - A clue's answer remains absent from player API responses until its code has
   been entered correctly.
+- Clues may have ordered text, photo, or video hints. A player chooses when to
+  reveal a hint, and each later hint remains locked until the previous hint has
+  been revealed.
 - Closed games preserve revealed clues but do not accept new completions.
 - Administrators are ordinary users with `is_admin` enabled and may also play.
 
@@ -129,7 +132,8 @@ Sign in and open `/admin`.
 1. Create player accounts under **Players** and copy each invitation link.
 2. Create a draft game under **Games**.
 3. Add clues and answers. Each code must be unique. After saving a clue, reopen
-   it to optionally attach one photo and one video.
+   it to optionally attach clue media and configure ordered text, photo, or
+   video hints.
 4. Assign active players to the game.
 5. Change the game status to **Open**.
 6. Drag clues by their grip handles to change the order; up/down buttons remain
@@ -168,6 +172,10 @@ The default video duration limit is five minutes in addition to the 100 MiB file
 limit. The size and duration limits can be changed with
 `PDC_PHOTO_MAX_BYTES`, `PDC_VIDEO_MAX_BYTES`, and
 `PDC_VIDEO_MAX_DURATION_SECONDS`.
+
+Hint media uses the same file limits and private Cloudflare delivery as clue
+media. A hint attachment is not authorized for a player until that player has
+revealed the hint.
 
 ## Verification
 

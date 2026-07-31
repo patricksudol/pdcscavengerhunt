@@ -16,6 +16,9 @@ from .models import (
     Game,
     GamePlayer,
     GameStatus,
+    Hint,
+    HintMedia,
+    HintReveal,
     MediaType,
 )
 from .security import login_required
@@ -43,7 +46,7 @@ async def player_can_access(db, request: Request, game: Game) -> bool:
 @login_required()
 async def serve_media(request: Request, media_id: UUID):
     async with request.app.ctx.db.session() as db:
-        row = (
+        clue_row = (
             await db.execute(
                 select(ClueMedia, Clue, Game)
                 .join(Clue, Clue.id == ClueMedia.clue_id)
@@ -51,11 +54,44 @@ async def serve_media(request: Request, media_id: UUID):
                 .where(ClueMedia.id == media_id)
             )
         ).one_or_none()
-        if not row:
-            raise NotFound("Media not found")
-        media, _clue, game = row
-        if not await player_can_access(db, request, game):
-            raise NotFound("Media not found")
+        if clue_row:
+            media, _clue, game = clue_row
+            if not await player_can_access(db, request, game):
+                raise NotFound("Media not found")
+        else:
+            hint_row = (
+                await db.execute(
+                    select(HintMedia, Hint, Clue, Game)
+                    .join(Hint, Hint.id == HintMedia.hint_id)
+                    .join(Clue, Clue.id == Hint.clue_id)
+                    .join(Game, Game.id == Clue.game_id)
+                    .where(HintMedia.id == media_id)
+                )
+            ).one_or_none()
+            if not hint_row:
+                raise NotFound("Media not found")
+            media, hint, _clue, game = hint_row
+            if request.ctx.user.is_admin:
+                allowed = True
+            else:
+                membership = await db.scalar(
+                    select(GamePlayer).where(
+                        GamePlayer.game_id == game.id,
+                        GamePlayer.user_id == request.ctx.user.id,
+                    )
+                )
+                allowed = bool(
+                    membership
+                    and game.status != GameStatus.draft
+                    and await db.scalar(
+                        select(HintReveal.id).where(
+                            HintReveal.game_player_id == membership.id,
+                            HintReveal.hint_id == hint.id,
+                        )
+                    )
+                )
+            if not allowed:
+                raise NotFound("Media not found")
         if media.status != "ready":
             raise ServiceUnavailable("This media is still processing")
 
@@ -117,6 +153,13 @@ async def stream_webhook(request: Request):
             )
         )
         if not media:
+            media = await db.scalar(
+                select(HintMedia).where(
+                    HintMedia.provider_key == uid,
+                    HintMedia.media_type == MediaType.video,
+                )
+            )
+        if not media:
             logger.warning(
                 "event=stream_webhook_unmatched request_id=%s stream_uid=%s "
                 "provider_status=%s",
@@ -135,11 +178,18 @@ async def stream_webhook(request: Request):
             delete_oversized = True
         media.status = status
         if previous_status != status:
+            is_clue_media = isinstance(media, ClueMedia)
             db.add(
                 AuditEvent(
-                    action=f"clue.media_{status}",
-                    entity_type="clue",
-                    entity_id=str(media.clue_id),
+                    action=(
+                        f"clue.media_{status}"
+                        if is_clue_media
+                        else f"hint.media_{status}"
+                    ),
+                    entity_type="clue" if is_clue_media else "hint",
+                    entity_id=str(
+                        media.clue_id if is_clue_media else media.hint_id
+                    ),
                     before={"status": previous_status},
                     after={"status": status, "media_id": str(media.id)},
                     reason=(

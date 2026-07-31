@@ -26,6 +26,16 @@ export interface PlayerClue {
   completed_at?: string;
   photo?: ClueMedia | null;
   video?: ClueMedia | null;
+  hints: PlayerHint[];
+}
+
+export interface PlayerHint {
+  id?: string;
+  position: number;
+  status: "revealed" | "available" | "locked";
+  text?: string | null;
+  photo?: ClueMedia | null;
+  video?: ClueMedia | null;
 }
 
 export interface PlayerGameDetail extends PlayerGame {
@@ -96,6 +106,15 @@ export interface AdminClue {
   content: string;
   code: string | null;
   code_set: boolean;
+  photo: ClueMedia | null;
+  video: ClueMedia | null;
+  hints: AdminHint[];
+}
+
+export interface AdminHint {
+  id: string;
+  position: number;
+  text: string | null;
   photo: ClueMedia | null;
   video: ClueMedia | null;
 }

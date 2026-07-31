@@ -11,6 +11,8 @@ from pdcscavengerhunt.models import (
     ClueCompletion,
     Game,
     GamePlayer,
+    Hint,
+    HintReveal,
     PasswordSetupToken,
     User,
 )
@@ -73,6 +75,34 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
     )
     assert duplicate_code.status == 409
 
+    hint_ids = []
+    for text in ("Start near the clock.", "Look above the storefront."):
+        _request, hint = await app.asgi_client.post(
+            f"/api/v1/admin/clues/{clue_ids[0]}/hints",
+            json={"text": text},
+            cookies=cookies,
+            headers=headers,
+        )
+        assert hint.status == 201
+        hint_ids.append(hint.json["id"])
+
+    _request, updated_hint = await app.asgi_client.patch(
+        f"/api/v1/admin/hints/{hint_ids[0]}",
+        json={"text": "Begin beside the clock."},
+        cookies=cookies,
+        headers=headers,
+    )
+    assert updated_hint.status == 200
+    assert updated_hint.json["text"] == "Begin beside the clock."
+
+    _request, reordered_hints = await app.asgi_client.post(
+        f"/api/v1/admin/clues/{clue_ids[0]}/hints/reorder",
+        json={"hint_ids": list(reversed(hint_ids))},
+        cookies=cookies,
+        headers=headers,
+    )
+    assert reordered_hints.status == 200
+
     _request, reordered = await app.asgi_client.post(
         f"/api/v1/admin/games/{game_id}/clues/reorder",
         json={"clue_ids": list(reversed(clue_ids))},
@@ -91,6 +121,13 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
         "UNIQUE-ONE",
         "UNIQUE-TWO",
     }
+    configured_clue = next(
+        clue for clue in detail.json["clues"] if clue["id"] == clue_ids[0]
+    )
+    assert [hint["id"] for hint in configured_clue["hints"]] == list(
+        reversed(hint_ids)
+    )
+    assert configured_clue["hints"][1]["text"] == "Begin beside the clock."
 
     _request, opened = await app.asgi_client.patch(
         f"/api/v1/admin/games/{game_id}",
@@ -122,6 +159,9 @@ async def test_admin_can_configure_game_players_and_clues(app, admin):
             "game.players_updated",
             "clue.created",
             "clues.reordered",
+            "hint.created",
+            "hint.updated",
+            "hints.reordered",
         }
         assert expected_actions <= actions
 
@@ -471,11 +511,17 @@ async def test_admin_can_reset_player_progress_with_reason(app, admin):
         )
         db.add_all([membership, clue])
         await db.flush()
-        db.add(
-            ClueCompletion(
-                game_player_id=membership.id,
-                clue_id=clue.id,
-            )
+        hint = Hint(clue_id=clue.id, position=1, text="Reset hint")
+        db.add(hint)
+        await db.flush()
+        db.add_all(
+            [
+                ClueCompletion(
+                    game_player_id=membership.id,
+                    clue_id=clue.id,
+                ),
+                HintReveal(game_player_id=membership.id, hint_id=hint.id),
+            ]
         )
         membership_id = membership.id
 
@@ -491,6 +537,7 @@ async def test_admin_can_reset_player_progress_with_reason(app, admin):
 
     async with app.ctx.db.session() as db:
         assert await db.scalar(select(ClueCompletion)) is None
+        assert await db.scalar(select(HintReveal)) is None
         event = await db.scalar(
             select(AuditEvent).where(AuditEvent.action == "player.progress_reset")
         )

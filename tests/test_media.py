@@ -12,6 +12,8 @@ from pdcscavengerhunt.models import (
     ClueMedia,
     Game,
     GamePlayer,
+    Hint,
+    HintMedia,
     User,
 )
 from pdcscavengerhunt.security import fingerprint_code
@@ -158,6 +160,30 @@ async def upload_media(
     )
 
 
+async def upload_hint_media(
+    app,
+    admin,
+    provider: FakeMediaProvider,
+    hint,
+    media_type: str,
+    content: bytes,
+    content_type: str,
+    filename: str,
+):
+    cookies, headers = auth(app, admin)
+    provider.next_video_status = "ready"
+    return await app.asgi_client.put(
+        f"/api/v1/admin/hints/{hint.id}/media/{media_type}",
+        content=content,
+        cookies=cookies,
+        headers={
+            **headers,
+            "Content-Type": content_type,
+            "X-File-Name": filename,
+        },
+    )
+
+
 async def test_admin_uploads_cloudflare_media_and_player_gets_private_redirects(
     app,
     admin,
@@ -234,6 +260,90 @@ async def test_media_is_available_for_any_clue_to_assigned_players(app, admin):
         cookies=stranger_cookies,
     )
     assert unassigned.status == 404
+
+
+async def test_hint_media_is_private_until_the_hint_is_revealed(app, admin):
+    provider = FakeMediaProvider()
+    app.ctx.media = provider
+    player, stranger, game, _membership, clues = await make_media_game(app)
+    async with app.ctx.db.session() as db:
+        hint = Hint(clue_id=clues[0].id, position=1, text=None)
+        db.add(hint)
+        await db.flush()
+
+    _request, uploaded = await upload_hint_media(
+        app,
+        admin,
+        provider,
+        hint,
+        "photo",
+        PHOTO_BYTES,
+        "image/png",
+        "hint.png",
+    )
+    assert uploaded.status == 201
+    _request, uploaded_video = await upload_hint_media(
+        app,
+        admin,
+        provider,
+        hint,
+        "video",
+        VIDEO_BYTES,
+        "video/mp4",
+        "hint.mp4",
+    )
+    assert uploaded_video.status == 201
+
+    player_cookies, player_headers = auth(app, player)
+    _request, hidden = await app.asgi_client.get(
+        uploaded.json["url"],
+        cookies=player_cookies,
+    )
+    assert hidden.status == 404
+
+    _request, revealed = await app.asgi_client.post(
+        f"/api/v1/player/games/{game.id}/clues/{clues[0].id}/hints/{hint.id}/reveal",
+        json={},
+        cookies=player_cookies,
+        headers=player_headers,
+    )
+    assert revealed.status == 200
+    hint_state = revealed.json["game"]["clues"][0]["hints"][0]
+    assert hint_state["photo"]["url"] == uploaded.json["url"]
+    assert hint_state["video"]["url"] == uploaded_video.json["url"]
+
+    _request, available = await app.asgi_client.get(
+        uploaded.json["url"],
+        cookies=player_cookies,
+    )
+    assert available.status == 302
+    _request, video_available = await app.asgi_client.get(
+        uploaded_video.json["url"],
+        cookies=player_cookies,
+    )
+    assert video_available.status == 302
+    stranger_cookies, _headers = auth(app, stranger)
+    _request, unassigned = await app.asgi_client.get(
+        uploaded.json["url"],
+        cookies=stranger_cookies,
+    )
+    assert unassigned.status == 404
+
+    async with app.ctx.db.session() as db:
+        assert await db.scalar(select(func.count(HintMedia.id))) == 2
+
+    admin_cookies, admin_headers = auth(app, admin)
+    _request, deleted = await app.asgi_client.delete(
+        f"/api/v1/admin/hints/{hint.id}",
+        cookies=admin_cookies,
+        headers=admin_headers,
+    )
+    assert deleted.status == 200
+    assert provider.deleted_photos
+    assert provider.deleted_videos
+    async with app.ctx.db.session() as db:
+        assert await db.scalar(select(func.count(HintMedia.id))) == 0
+
 
 async def test_replacing_removing_and_deleting_media_cleans_up_cloudflare(
     app,

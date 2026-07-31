@@ -7,6 +7,8 @@ import {
   ChevronRight,
   Flag,
   KeyRound,
+  Lightbulb,
+  LockKeyhole,
   LogOut,
   Map,
   MapPin,
@@ -22,6 +24,7 @@ import {
   PlayerClue,
   PlayerGame,
   PlayerGameDetail,
+  PlayerHint,
   postJson,
   setCsrfToken,
 } from "./api";
@@ -61,6 +64,79 @@ export function ClueMediaAttachments({
   );
 }
 
+export function ClueHints({
+  hints,
+  canReveal,
+  busy,
+  error,
+  onReveal,
+}: {
+  hints: PlayerHint[];
+  canReveal: boolean;
+  busy: boolean;
+  error: unknown;
+  onReveal: (hintId: string) => void;
+}) {
+  if (!hints.length) return null;
+  const revealed = hints.filter((hint) => hint.status === "revealed");
+  const available = hints.find((hint) => hint.status === "available");
+  const remaining = hints.length - revealed.length;
+  return (
+    <section className="clue-hints" aria-labelledby="clue-hints-title">
+      <header>
+        <span className="clue-hints__icon" aria-hidden="true"><Lightbulb /></span>
+        <div>
+          <div className="eyebrow">Need a nudge?</div>
+          <h2 id="clue-hints-title">Hints</h2>
+        </div>
+        <small>{revealed.length} of {hints.length} revealed</small>
+      </header>
+      {revealed.map((hint) => (
+        <article className="revealed-hint" key={hint.id}>
+          <div className="revealed-hint__label">
+            <CheckCircle2 aria-hidden="true" /> Hint {hint.position}
+          </div>
+          {hint.text && <p>{hint.text}</p>}
+          <ClueMediaAttachments
+            photo={hint.photo}
+            video={hint.video}
+            clueTitle={`Hint ${hint.position}`}
+          />
+        </article>
+      ))}
+      {available && canReveal && available.id && (
+        <div className="next-hint">
+          <div>
+            <strong>Reveal hint {available.position}?</strong>
+            <span>
+              {remaining > 1
+                ? "The next hint unlocks after this one."
+                : "This is the final hint."}
+            </span>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            busy={busy}
+            onClick={() => onReveal(available.id!)}
+          >
+            <Lightbulb /> Reveal hint
+          </Button>
+        </div>
+      )}
+      {!canReveal && remaining > 0 && (
+        <div className="next-hint next-hint--locked">
+          <LockKeyhole aria-hidden="true" />
+          <span>
+            {remaining} unrevealed {remaining === 1 ? "hint" : "hints"}
+          </span>
+        </div>
+      )}
+      <ErrorMessage error={error} />
+    </section>
+  );
+}
+
 export function ClueDetailCard({
   clue,
   clueCount,
@@ -68,8 +144,11 @@ export function ClueDetailCard({
   code,
   busy,
   error,
+  hintBusy,
+  hintError,
   onCodeChange,
   onSubmit,
+  onRevealHint,
 }: {
   clue: PlayerClue;
   clueCount: number;
@@ -77,8 +156,11 @@ export function ClueDetailCard({
   code: string;
   busy: boolean;
   error: unknown;
+  hintBusy: boolean;
+  hintError: unknown;
   onCodeChange: (value: string) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onRevealHint: (hintId: string) => void;
 }) {
   const headingId = `clue-${clue.position}`;
   const completed = clue.status === "completed";
@@ -103,6 +185,13 @@ export function ClueDetailCard({
           photo={clue.photo}
           video={clue.video}
           clueTitle={clue.clue}
+        />
+        <ClueHints
+          hints={clue.hints}
+          canReveal={!completed && gameStatus === "open"}
+          busy={hintBusy}
+          error={hintError}
+          onReveal={onRevealHint}
         />
         {completed ? (
           <div className="unlock-card__answer">
@@ -344,6 +433,16 @@ function GameView({
       }
     },
   });
+  const revealHint = useMutation({
+    mutationFn: (hintId: string) =>
+      postJson<{ created: boolean; game: PlayerGameDetail }>(
+        `/api/v1/player/games/${gameId}/clues/${selectedClue?.id}/hints/${hintId}/reveal`,
+        {},
+      ),
+    onSuccess: (result) => {
+      queryClient.setQueryData(["player-game", gameId], result.game);
+    },
+  });
 
   useEffect(() => {
     return () => {
@@ -427,8 +526,11 @@ function GameView({
                 code={code}
                 busy={complete.isPending || Boolean(celebration)}
                 error={complete.error}
+                hintBusy={revealHint.isPending}
+                hintError={revealHint.error}
                 onCodeChange={setCode}
                 onSubmit={submit}
+                onRevealHint={(hintId) => revealHint.mutate(hintId)}
               />
             ) : clueId ? (
               <EmptyState icon={<Flag />} title="Clue not found">

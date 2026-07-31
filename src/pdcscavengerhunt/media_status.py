@@ -4,13 +4,13 @@ from sanic import Request
 from sanic.log import logger
 
 from .cloudflare_media import MediaProviderError
-from .models import AuditEvent, ClueMedia, MediaType
+from .models import AuditEvent, ClueMedia, HintMedia, MediaType
 
 
 async def refresh_processing_videos(
     request: Request,
     db,
-    media_items: list[ClueMedia],
+    media_items: list[ClueMedia] | list[HintMedia],
 ) -> None:
     for media in media_items:
         if media.media_type != MediaType.video or media.status != "processing":
@@ -41,9 +41,17 @@ async def refresh_processing_videos(
         )
         db.add(
             AuditEvent(
-                action=f"clue.media_{video.status}",
-                entity_type="clue",
-                entity_id=str(media.clue_id),
+                action=(
+                    f"clue.media_{video.status}"
+                    if isinstance(media, ClueMedia)
+                    else f"hint.media_{video.status}"
+                ),
+                entity_type="clue" if isinstance(media, ClueMedia) else "hint",
+                entity_id=str(
+                    media.clue_id
+                    if isinstance(media, ClueMedia)
+                    else media.hint_id
+                ),
                 before={"status": previous_status},
                 after={"status": video.status, "media_id": str(media.id)},
                 reason="Reconciled with Cloudflare Stream",

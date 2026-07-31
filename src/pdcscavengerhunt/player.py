@@ -16,6 +16,9 @@ from .models import (
     Game,
     GamePlayer,
     GameStatus,
+    Hint,
+    HintMedia,
+    HintReveal,
     MediaType,
 )
 from .schemas import CodeSubmission
@@ -62,6 +65,25 @@ async def game_state(
         ).all()
     )
     completion_map = {completion.clue_id: completion for completion in completions}
+    hints = list(
+        (
+            await db.scalars(
+                select(Hint)
+                .where(Hint.clue_id.in_([clue.id for clue in clues]))
+                .order_by(Hint.clue_id, Hint.position)
+            )
+        ).all()
+    )
+    hint_reveals = list(
+        (
+            await db.scalars(
+                select(HintReveal).where(
+                    HintReveal.game_player_id == membership.id
+                )
+            )
+        ).all()
+    )
+    revealed_hint_ids = {reveal.hint_id for reveal in hint_reveals}
     media_items = list(
         (
             await db.scalars(
@@ -75,6 +97,22 @@ async def game_state(
     media_by_clue: dict[UUID, dict[MediaType, ClueMedia]] = {}
     for media in media_items:
         media_by_clue.setdefault(media.clue_id, {})[media.media_type] = media
+    hint_media_items = list(
+        (
+            await db.scalars(
+                select(HintMedia).where(
+                    HintMedia.hint_id.in_([hint.id for hint in hints])
+                )
+            )
+        ).all()
+    )
+    await refresh_processing_videos(request, db, hint_media_items)
+    media_by_hint: dict[UUID, dict[MediaType, HintMedia]] = {}
+    for media in hint_media_items:
+        media_by_hint.setdefault(media.hint_id, {})[media.media_type] = media
+    hints_by_clue: dict[UUID, list[Hint]] = {}
+    for hint in hints:
+        hints_by_clue.setdefault(hint.clue_id, []).append(hint)
 
     def media_for(clue: Clue, media_type: MediaType) -> dict | None:
         media = media_by_clue.get(clue.id, {}).get(media_type)
@@ -88,6 +126,59 @@ async def game_state(
             "status": media.status,
             "url": f"/api/v1/media/{media.id}",
         }
+
+    def hint_media_for(hint: Hint, media_type: MediaType) -> dict | None:
+        media = media_by_hint.get(hint.id, {}).get(media_type)
+        if not media or media.status != "ready":
+            return None
+        return {
+            "id": str(media.id),
+            "media_type": media.media_type.value,
+            "content_type": media.content_type,
+            "size_bytes": media.size_bytes,
+            "status": media.status,
+            "url": f"/api/v1/media/{media.id}",
+        }
+
+    def hints_for(clue: Clue) -> list[dict]:
+        clue_hints = hints_by_clue.get(clue.id, [])
+        first_unrevealed = next(
+            (
+                index
+                for index, hint in enumerate(clue_hints)
+                if hint.id not in revealed_hint_ids
+            ),
+            len(clue_hints),
+        )
+        result = []
+        for index, hint in enumerate(clue_hints):
+            if hint.id in revealed_hint_ids:
+                result.append(
+                    {
+                        "id": str(hint.id),
+                        "position": hint.position,
+                        "status": "revealed",
+                        "text": hint.text,
+                        "photo": hint_media_for(hint, MediaType.photo),
+                        "video": hint_media_for(hint, MediaType.video),
+                    }
+                )
+            elif index == first_unrevealed:
+                result.append(
+                    {
+                        "id": str(hint.id),
+                        "position": hint.position,
+                        "status": "available",
+                    }
+                )
+            else:
+                result.append(
+                    {
+                        "position": hint.position,
+                        "status": "locked",
+                    }
+                )
+        return result
 
     is_complete = bool(clues) and len(completions) == len(clues)
     clue_data = []
@@ -104,6 +195,7 @@ async def game_state(
                     "completed_at": completion.completed_at.isoformat(),
                     "photo": media_for(clue, MediaType.photo),
                     "video": media_for(clue, MediaType.video),
+                    "hints": hints_for(clue),
                 }
             )
         else:
@@ -115,6 +207,7 @@ async def game_state(
                     "clue": clue.title,
                     "photo": media_for(clue, MediaType.photo),
                     "video": media_for(clue, MediaType.video),
+                    "hints": hints_for(clue),
                 }
             )
     return {
@@ -178,6 +271,87 @@ async def get_game(request: Request, game_id: UUID):
         if not game or not membership or game.status == GameStatus.draft:
             raise NotFound("Game not found")
         return await game_state(request, db, game, membership)
+
+
+@player_bp.post(
+    "/games/<game_id:uuid>/clues/<clue_id:uuid>/hints/<hint_id:uuid>/reveal"
+)
+@login_required()
+async def reveal_hint(
+    request: Request,
+    game_id: UUID,
+    clue_id: UUID,
+    hint_id: UUID,
+):
+    async with request.app.ctx.db.session() as db:
+        game = await db.get(Game, game_id)
+        membership = await membership_for(
+            db, game_id, request.ctx.user.id, lock=True
+        )
+        if not game or not membership:
+            raise NotFound("Game not found")
+        if game.status != GameStatus.open:
+            raise Forbidden("This game is not open for new hints")
+        clue = await db.get(Clue, clue_id)
+        if not clue or clue.game_id != game.id:
+            raise NotFound("Clue not found")
+        completed = await db.scalar(
+            select(ClueCompletion.id).where(
+                ClueCompletion.game_player_id == membership.id,
+                ClueCompletion.clue_id == clue.id,
+            )
+        )
+        if completed:
+            raise InvalidUsage("This clue has already been solved")
+        hints = list(
+            (
+                await db.scalars(
+                    select(Hint)
+                    .where(Hint.clue_id == clue.id)
+                    .order_by(Hint.position)
+                )
+            ).all()
+        )
+        target = next((hint for hint in hints if hint.id == hint_id), None)
+        if not target:
+            raise NotFound("Hint not found")
+        revealed_ids = set(
+            (
+                await db.scalars(
+                    select(HintReveal.hint_id).where(
+                        HintReveal.game_player_id == membership.id
+                    )
+                )
+            ).all()
+        )
+        if target.id in revealed_ids:
+            return {
+                "created": False,
+                "game": await game_state(request, db, game, membership),
+            }
+        next_hint = next((hint for hint in hints if hint.id not in revealed_ids), None)
+        if not next_hint or next_hint.id != target.id:
+            raise InvalidUsage("Reveal the earlier hints first")
+        db.add(HintReveal(game_player_id=membership.id, hint_id=target.id))
+        await db.flush()
+        db.add(
+            AuditEvent(
+                actor_id=request.ctx.user.id,
+                action="hint.revealed",
+                entity_type="hint",
+                entity_id=str(target.id),
+                after={
+                    "game_id": str(game.id),
+                    "clue_id": str(clue.id),
+                    "position": target.position,
+                },
+                request_id=request.ctx.request_id,
+            )
+        )
+        return {
+            "created": True,
+            "game": await game_state(request, db, game, membership),
+        }
 
 
 @player_bp.post("/games/<game_id:uuid>/clues/<clue_id:uuid>/complete")

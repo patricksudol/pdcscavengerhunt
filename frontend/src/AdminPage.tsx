@@ -30,6 +30,7 @@ import {
   GripVertical,
   Image as ImageIcon,
   KeyRound,
+  Lightbulb,
   ListChecks,
   LockKeyhole,
   LogOut,
@@ -50,6 +51,7 @@ import {
   AdminClue,
   AdminGame,
   AdminGameDetail,
+  AdminHint,
   AdminUser,
   AuditEvent,
   AuditEventPage,
@@ -281,6 +283,16 @@ const auditActionLabels: Record<string, string> = {
   "clue.media_removed": "Removed clue media",
   "clue.media_ready": "Finished processing clue media",
   "clue.media_error": "Failed to process clue media",
+  "hint.created": "Created hint",
+  "hint.updated": "Updated hint",
+  "hint.deleted": "Deleted hint",
+  "hints.reordered": "Reordered hints",
+  "hint.media_attached": "Attached hint media",
+  "hint.media_replaced": "Replaced hint media",
+  "hint.media_removed": "Removed hint media",
+  "hint.media_ready": "Finished processing hint media",
+  "hint.media_error": "Failed to process hint media",
+  "hint.revealed": "Revealed hint",
   "player.progress_advanced": "Advanced player progress",
   "player.progress_reset": "Reset player progress",
 };
@@ -598,6 +610,14 @@ function SortableClueRow({
           <div className="clue-admin-media">
             {clue.photo && <span><ImageIcon /> Photo</span>}
             {clue.video && <span><Video /> Video</span>}
+          </div>
+        )}
+        {clue.hints.length > 0 && (
+          <div className="clue-admin-media">
+            <span>
+              <Lightbulb /> {clue.hints.length}{" "}
+              {clue.hints.length === 1 ? "Hint" : "Hints"}
+            </span>
           </div>
         )}
       </div>
@@ -1039,14 +1059,21 @@ function formatFileSize(bytes: number) {
 }
 
 function MediaAttachmentEditor({
-  clue,
+  owner,
+  ownerType,
+  ownerLabel,
   onChanged,
 }: {
-  clue: AdminClue;
-  onChanged: () => void;
+  owner: Pick<AdminClue | AdminHint, "id" | "photo" | "video">;
+  ownerType: "clues" | "hints";
+  ownerLabel: "clue" | "hint";
+  onChanged: (
+    mediaType: "photo" | "video",
+    media: ClueMedia | null,
+  ) => void;
 }) {
-  const [photo, setPhoto] = useState<ClueMedia | null>(clue.photo);
-  const [video, setVideo] = useState<ClueMedia | null>(clue.video);
+  const [photo, setPhoto] = useState<ClueMedia | null>(owner.photo);
+  const [video, setVideo] = useState<ClueMedia | null>(owner.video);
   const [selectionError, setSelectionError] = useState<Error | null>(null);
   const upload = useMutation({
     mutationFn: async ({
@@ -1056,7 +1083,7 @@ function MediaAttachmentEditor({
       mediaType: "photo" | "video";
       file: File;
     }) => {
-      const path = `/api/v1/admin/clues/${clue.id}/media/${mediaType}`;
+      const path = `/api/v1/admin/${ownerType}/${owner.id}/media/${mediaType}`;
       return api<ClueMedia>(path, {
         method: "PUT",
         body: file,
@@ -1069,18 +1096,18 @@ function MediaAttachmentEditor({
     onSuccess: (media) => {
       if (media.media_type === "photo") setPhoto(media);
       else setVideo(media);
-      onChanged();
+      onChanged(media.media_type, media);
     },
   });
   const remove = useMutation({
     mutationFn: (mediaType: "photo" | "video") =>
-      api(`/api/v1/admin/clues/${clue.id}/media/${mediaType}`, {
+      api(`/api/v1/admin/${ownerType}/${owner.id}/media/${mediaType}`, {
         method: "DELETE",
       }),
     onSuccess: (_result, mediaType) => {
       if (mediaType === "photo") setPhoto(null);
       else setVideo(null);
-      onChanged();
+      onChanged(mediaType, null);
     },
   });
 
@@ -1102,7 +1129,7 @@ function MediaAttachmentEditor({
   }
 
   function removeMedia(mediaType: "photo" | "video") {
-    if (window.confirm(`Remove this clue's ${mediaType}?`)) {
+    if (window.confirm(`Remove this ${ownerLabel}'s ${mediaType}?`)) {
       remove.mutate(mediaType);
     }
   }
@@ -1142,7 +1169,7 @@ function MediaAttachmentEditor({
             {video.status === "ready" ? (
               <iframe
                 src={video.url}
-                title={`Preview of ${video.original_filename ?? "clue video"}`}
+                title={`Preview of ${video.original_filename ?? `${ownerLabel} video`}`}
                 allow="accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture"
                 allowFullScreen
               />
@@ -1174,6 +1201,243 @@ function MediaAttachmentEditor({
       </div>
       {upload.isPending && <p className="media-editor__status">Uploading media… Keep this window open.</p>}
       <ErrorMessage error={selectionError || upload.error || remove.error} />
+    </section>
+  );
+}
+
+function HintEditor({
+  hint,
+  onClose,
+  onSaved,
+  onMediaChanged,
+}: {
+  hint: AdminHint;
+  onClose: () => void;
+  onSaved: (hint: AdminHint) => void;
+  onMediaChanged: (
+    hintId: string,
+    mediaType: "photo" | "video",
+    media: ClueMedia | null,
+  ) => void;
+}) {
+  const [text, setText] = useState(hint.text ?? "");
+  const save = useMutation({
+    mutationFn: () =>
+      postJson<AdminHint>(
+        `/api/v1/admin/hints/${hint.id}`,
+        { text: text || null },
+        "PATCH",
+      ),
+    onSuccess: onSaved,
+  });
+  return (
+    <Modal title={`Edit hint ${hint.position}`} onClose={onClose}>
+      <div className="modal-form">
+        <TextArea
+          label="Hint text"
+          name={`hint-text-${hint.id}`}
+          rows={4}
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          hint="Optional when the hint includes a photo or video."
+        />
+        <MediaAttachmentEditor
+          owner={hint}
+          ownerType="hints"
+          ownerLabel="hint"
+          onChanged={(mediaType, media) =>
+            onMediaChanged(hint.id, mediaType, media)
+          }
+        />
+        <ErrorMessage error={save.error} />
+        <div className="modal-actions">
+          <Button variant="quiet" type="button" onClick={onClose}>Cancel</Button>
+          <Button
+            busy={save.isPending}
+            type="button"
+            onClick={() => save.mutate()}
+          >
+            Save hint
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function HintsEditor({
+  clue,
+  onChanged,
+}: {
+  clue: AdminClue;
+  onChanged: () => void;
+}) {
+  const [hints, setHints] = useState(clue.hints);
+  const [editing, setEditing] = useState<AdminHint | null>(null);
+  const [newText, setNewText] = useState("");
+  const create = useMutation({
+    mutationFn: () =>
+      postJson<AdminHint>(`/api/v1/admin/clues/${clue.id}/hints`, {
+        text: newText || null,
+      }),
+    onSuccess: (hint) => {
+      setHints((current) => [...current, hint]);
+      setNewText("");
+      onChanged();
+    },
+  });
+  const reorder = useMutation({
+    mutationFn: (hintIds: string[]) =>
+      postJson(`/api/v1/admin/clues/${clue.id}/hints/reorder`, {
+        hint_ids: hintIds,
+      }),
+    onSuccess: onChanged,
+  });
+  const remove = useMutation({
+    mutationFn: (hintId: string) =>
+      api(`/api/v1/admin/hints/${hintId}`, { method: "DELETE" }),
+    onSuccess: (_result, hintId) => {
+      setHints((current) =>
+        current
+          .filter((hint) => hint.id !== hintId)
+          .map((hint, index) => ({ ...hint, position: index + 1 })),
+      );
+      onChanged();
+    },
+  });
+
+  function move(index: number, direction: -1 | 1) {
+    const next = [...hints];
+    [next[index], next[index + direction]] = [
+      next[index + direction],
+      next[index],
+    ];
+    const positioned = next.map((hint, hintIndex) => ({
+      ...hint,
+      position: hintIndex + 1,
+    }));
+    setHints(positioned);
+    reorder.mutate(positioned.map((hint) => hint.id));
+  }
+
+  function updateHint(updated: AdminHint) {
+    setHints((current) =>
+      current.map((hint) => hint.id === updated.id ? updated : hint),
+    );
+    setEditing(null);
+    onChanged();
+  }
+
+  function updateHintMedia(
+    hintId: string,
+    mediaType: "photo" | "video",
+    media: ClueMedia | null,
+  ) {
+    setHints((current) =>
+      current.map((hint) =>
+        hint.id === hintId ? { ...hint, [mediaType]: media } : hint,
+      ),
+    );
+    setEditing((current) =>
+      current?.id === hintId ? { ...current, [mediaType]: media } : current,
+    );
+    onChanged();
+  }
+
+  return (
+    <section className="hint-editor">
+      <header>
+        <div>
+          <strong><Lightbulb /> Player hints</strong>
+          <small>Players reveal these one at a time in this order.</small>
+        </div>
+      </header>
+      {hints.length > 0 && (
+        <div className="hint-admin-list">
+          {hints.map((hint, index) => (
+            <article className="hint-admin-row" key={hint.id}>
+              <span className="hint-admin-position">{hint.position}</span>
+              <span className="hint-admin-copy">
+                <strong>{hint.text || "Media-only hint"}</strong>
+                <small>
+                  {[
+                    hint.text && "Text",
+                    hint.photo && "Photo",
+                    hint.video && "Video",
+                  ].filter(Boolean).join(" · ") || "No content yet"}
+                </small>
+              </span>
+              <span className="hint-admin-actions">
+                <button
+                  className="icon-button"
+                  type="button"
+                  disabled={index === 0 || reorder.isPending}
+                  onClick={() => move(index, -1)}
+                  aria-label={`Move hint ${hint.position} up`}
+                >
+                  <ChevronUp />
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  disabled={index === hints.length - 1 || reorder.isPending}
+                  onClick={() => move(index, 1)}
+                  aria-label={`Move hint ${hint.position} down`}
+                >
+                  <ChevronDown />
+                </button>
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => setEditing(hint)}
+                  aria-label={`Edit hint ${hint.position}`}
+                >
+                  <Pencil />
+                </button>
+                <button
+                  className="icon-button danger-icon"
+                  type="button"
+                  onClick={() => {
+                    if (window.confirm(`Delete hint ${hint.position}?`)) {
+                      remove.mutate(hint.id);
+                    }
+                  }}
+                  aria-label={`Delete hint ${hint.position}`}
+                >
+                  <Trash2 />
+                </button>
+              </span>
+            </article>
+          ))}
+        </div>
+      )}
+      <div className="hint-editor__add">
+        <TextArea
+          label="New hint text"
+          name={`new-hint-${clue.id}`}
+          rows={2}
+          value={newText}
+          onChange={(event) => setNewText(event.target.value)}
+          hint="Optional. Add the hint, then edit it to attach media."
+        />
+        <Button
+          type="button"
+          variant="secondary"
+          busy={create.isPending}
+          onClick={() => create.mutate()}
+        >
+          <Plus /> Add hint
+        </Button>
+      </div>
+      <ErrorMessage error={create.error || reorder.error || remove.error} />
+      {editing && (
+        <HintEditor
+          hint={editing}
+          onClose={() => setEditing(null)}
+          onSaved={updateHint}
+          onMediaChanged={updateHintMedia}
+        />
+      )}
     </section>
   );
 }
@@ -1214,12 +1478,22 @@ function ClueEditor({ gameId, clue, onClose, onSaved }: { gameId: string; clue: 
           }
         />
         {clue ? (
-          <MediaAttachmentEditor
-            clue={clue}
-            onChanged={() =>
-              queryClient.invalidateQueries({ queryKey: ["admin-game", gameId] })
-            }
-          />
+          <>
+            <MediaAttachmentEditor
+              owner={clue}
+              ownerType="clues"
+              ownerLabel="clue"
+              onChanged={() =>
+                queryClient.invalidateQueries({ queryKey: ["admin-game", gameId] })
+              }
+            />
+            <HintsEditor
+              clue={clue}
+              onChanged={() =>
+                queryClient.invalidateQueries({ queryKey: ["admin-game", gameId] })
+              }
+            />
+          </>
         ) : (
           <p className="media-editor__new-note">
             Save this clue, then reopen it to attach a photo or video.
